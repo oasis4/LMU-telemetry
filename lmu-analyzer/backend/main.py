@@ -79,11 +79,20 @@ def list_sessions():
 @app.post("/api/load", response_model=SessionInfo)
 def load_session(filename: str):
     """Load a .duckdb file and return session metadata."""
-    fpath = Path(TELEMETRY_DIR) / filename
-    if not fpath.is_file():
-        raise HTTPException(404, f"File not found: {filename}")
+    # Sanitize: only allow bare filenames (no path separators)
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or ".." in filename:
+        raise HTTPException(400, "Invalid filename.")
+    fpath = Path(TELEMETRY_DIR) / safe_name
+    # Ensure resolved path stays within TELEMETRY_DIR
+    resolved = fpath.resolve()
+    telemetry_root = Path(TELEMETRY_DIR).resolve()
+    if not str(resolved).startswith(str(telemetry_root) + os.sep) and resolved != telemetry_root:
+        raise HTTPException(400, "Invalid filename.")
+    if not resolved.is_file():
+        raise HTTPException(404, f"File not found: {safe_name}")
     try:
-        sess = DuckDBSession(str(fpath))
+        sess = DuckDBSession(str(resolved))
     except Exception as exc:
         raise HTTPException(400, f"Cannot open DuckDB: {exc}") from exc
 
