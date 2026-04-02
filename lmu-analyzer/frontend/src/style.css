@@ -1,0 +1,131 @@
+/* ===== LMU Telemetry Analyzer — Global Styles ===== */
+/* Dark theme, "Linear meets MoTeC" aesthetic */
+
+:root {
+  --bg-primary: #0d0d0f;
+  --bg-secondary: #111114;
+  --bg-tertiary: #161619;
+  --border: #1e1e2e;
+  --text-primary: #e0e0e0;
+  --text-secondary: #888;
+  --text-muted: #555;
+  --accent-blue: #3b82f6;
+  --accent-orange: #f97316;
+  --positive: #22c55e;
+  --negative: #ef4444;
+  --neutral: #888;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+/* Utility */
+.mono { font-family: var(--font-mono); }
+.text-blue { color: var(--accent-blue); }
+.text-orange { color: var(--accent-orange); }
+.text-green { color: var(--positive); }
+.text-red { color: var(--negative); }
+.text-muted { color: var(--text-muted); }
+
+/* Table */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+th, td {
+  padding: 6px 12px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+th:first-child, td:first-child { text-align: left; }
+
+/* Button */
+.btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-sans);
+}
+.btn:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+.btn-active {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #fff;
+}
+
+/* Loading spinner */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Tab bar */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab-bar button {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+.tab-bar button:hover {
+  color: var(--text-primary);
+}
+.tab-bar button.active {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+}
