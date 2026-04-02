@@ -79,10 +79,12 @@ def list_sessions():
 @app.post("/api/load", response_model=SessionInfo)
 def load_session(filename: str):
     """Load a .duckdb file and return session metadata."""
-    # Sanitize: only allow bare filenames (no path separators)
+    # Sanitize: only allow bare filenames with .duckdb extension (no path separators)
     safe_name = os.path.basename(filename)
     if safe_name != filename or ".." in filename:
         raise HTTPException(400, "Invalid filename.")
+    if not safe_name.lower().endswith(".duckdb"):
+        raise HTTPException(400, "Only .duckdb files are supported.")
     fpath = Path(TELEMETRY_DIR) / safe_name
     # Ensure resolved path stays within TELEMETRY_DIR
     resolved = fpath.resolve()
