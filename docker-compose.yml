@@ -4,9 +4,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8001:8001"
     environment:
       - TELEMETRY_DIR=/data
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001"]
     volumes:
       - ${TELEMETRY_DIR:-./data}:/data:ro
     restart: unless-stopped

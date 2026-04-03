@@ -86,6 +86,58 @@ class DeltaResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Driver / Multi-driver comparison
+# ---------------------------------------------------------------------------
+
+class DriverInfo(BaseModel):
+    name: str
+    sessions: list[str]  # session_ids
+
+
+class DriverCornerMetrics(BaseModel):
+    """Per-driver metrics for a single corner."""
+    driver: str
+    session_id: str
+    lap_number: int
+    corner_time_ms: float
+    min_speed: float
+    entry_speed: float
+    exit_speed: float
+    brake_point: float        # distance where braking begins
+    throttle_point: float     # distance where throttle > 50 % after apex
+    apex_speed: float
+
+
+class CornerComparison(BaseModel):
+    """One corner with metrics from every driver."""
+    corner_id: int
+    corner_name: str
+    distance_start: float
+    distance_apex: float
+    distance_end: float
+    best_driver: str
+    best_time_ms: float
+    drivers: list[DriverCornerMetrics]
+    tips: dict[str, list[str]]  # driver → list of coaching tips
+
+
+class CompareResponse(BaseModel):
+    track: str
+    corners: list[CornerComparison]
+    drivers: list[str]
+
+
+class LoadedSessionInfo(BaseModel):
+    """Summary of an already-loaded session."""
+    session_id: str
+    filename: str
+    driver: str
+    track: str
+    car: str
+    lap_count: int
+
+
+# ---------------------------------------------------------------------------
 # Channels (debug)
 # ---------------------------------------------------------------------------
 

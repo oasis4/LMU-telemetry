@@ -1,20 +1,26 @@
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTelemetryStore } from '../stores/telemetry.js'
 
 const store = useTelemetryStore()
 const router = useRouter()
+const driverInput = ref('')
 
 onMounted(() => {
   store.fetchSessions()
+  store.fetchLoadedSessions()
 })
 
 async function openSession(filename) {
-  await store.loadSession(filename)
+  await store.loadSession(filename, driverInput.value.trim())
   if (store.sessionId) {
     router.push({ name: 'laps', params: { sessionId: store.sessionId } })
   }
+}
+
+function goToCompare() {
+  router.push({ name: 'compare' })
 }
 </script>
 
@@ -25,6 +31,18 @@ async function openSession(filename) {
         <h2>Sessions</h2>
         <span class="text-muted">{{ store.sessions.length }} files</span>
       </div>
+
+      <!-- Driver name input -->
+      <div class="driver-input-area">
+        <label class="driver-label">Driver name</label>
+        <input
+          v-model="driverInput"
+          class="driver-input"
+          placeholder="Enter driver name…"
+          @keydown.enter.prevent
+        />
+      </div>
+
       <div class="session-list">
         <div v-if="store.loading" class="loading">Loading…</div>
         <div v-else-if="store.sessions.length === 0" class="empty">
@@ -43,6 +61,23 @@ async function openSession(filename) {
             <span v-if="s.date">{{ s.date }}</span>
           </div>
         </button>
+      </div>
+
+      <!-- Loaded sessions summary -->
+      <div class="loaded-area" v-if="store.loadedSessions.length">
+        <div class="loaded-header">
+          <h3>Loaded ({{ store.loadedSessions.length }})</h3>
+          <button class="btn-compare" @click="goToCompare" v-if="store.drivers.length >= 2">
+            Compare Drivers →
+          </button>
+        </div>
+        <div class="loaded-list">
+          <div v-for="ls in store.loadedSessions" :key="ls.session_id" class="loaded-item">
+            <span class="driver-badge">{{ ls.driver || 'Unknown' }}</span>
+            <span class="loaded-name">{{ ls.filename }}</span>
+            <span class="loaded-laps">{{ ls.lap_count }} laps</span>
+          </div>
+        </div>
       </div>
     </div>
     <div class="hero-area">
@@ -63,8 +98,8 @@ async function openSession(filename) {
             <div>Track map with delta heatmap</div>
           </div>
           <div class="feature">
-            <div class="feature-icon">⏱️</div>
-            <div>Sector &amp; theoretical best</div>
+            <div class="feature-icon">👥</div>
+            <div>Multi-driver corner comparison</div>
           </div>
         </div>
       </div>
@@ -101,6 +136,90 @@ async function openSession(filename) {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+}
+.driver-input-area {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.driver-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.driver-input {
+  width: 100%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  box-sizing: border-box;
+}
+.driver-input::placeholder {
+  color: var(--text-muted);
+}
+.loaded-area {
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.loaded-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.loaded-header h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.btn-compare {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn-compare:hover {
+  opacity: 0.85;
+}
+.loaded-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.loaded-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.driver-badge {
+  background: var(--accent-blue);
+  color: #fff;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.loaded-name {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.loaded-laps {
+  white-space: nowrap;
 }
 .session-item {
   display: block;

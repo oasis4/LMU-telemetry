@@ -14,6 +14,14 @@ const store = useTelemetryStore()
         <router-link :to="{ name: 'analysis', params: { sessionId: store.sessionId } }">
           Analysis
         </router-link>
+        <router-link :to="{ name: 'compare' }">
+          Drivers
+        </router-link>
+      </nav>
+      <nav v-else>
+        <router-link :to="{ name: 'compare' }">
+          Drivers
+        </router-link>
       </nav>
       <div class="session-info" v-if="store.currentSession">
         {{ store.currentSession.track }} &mdash; {{ store.currentSession.car }}

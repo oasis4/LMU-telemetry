@@ -3,3 +3,7 @@ pandas
 numpy
 cantools
 matplotlib
+fastapi
+uvicorn[standard]
+scipy
+pydantic

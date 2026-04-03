@@ -20,6 +20,11 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   const loading = ref(false)
   const error = ref(null)
 
+  // Multi-driver state
+  const loadedSessions = ref([])
+  const comparison = ref(null)
+  const driverName = ref('')
+
   // Computed
   const sessionId = computed(() => currentSession.value?.session_id || null)
 
@@ -28,6 +33,16 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     return laps.value.reduce((best, l) =>
       l.lap_time_ms < best.lap_time_ms ? l : best
     )
+  })
+
+  const drivers = computed(() => {
+    const names = new Set(loadedSessions.value.map(s => s.driver))
+    return [...names]
+  })
+
+  const tracks = computed(() => {
+    const names = new Set(loadedSessions.value.map(s => s.track).filter(Boolean))
+    return [...names]
   })
 
   // Actions
@@ -44,13 +59,50 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     }
   }
 
-  async function loadSession(filename) {
+  async function loadSession(filename, driver = '') {
     loading.value = true
     error.value = null
     try {
-      const { data } = await axios.post('/api/load', null, { params: { filename } })
+      const params = { filename }
+      if (driver) params.driver = driver
+      const { data } = await axios.post('/api/load', null, { params })
       currentSession.value = data
       await fetchLaps()
+      await fetchLoadedSessions()
+    } catch (e) {
+      error.value = e.message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function fetchLoadedSessions() {
+    try {
+      const { data } = await axios.get('/api/loaded')
+      loadedSessions.value = data
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function updateDriver(sessionId, driver) {
+    try {
+      await axios.patch(`/api/session/${sessionId}/driver`, null, {
+        params: { driver },
+      })
+      await fetchLoadedSessions()
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function fetchComparison(track = '') {
+    loading.value = true
+    error.value = null
+    try {
+      const params = track ? { track } : {}
+      const { data } = await axios.get('/api/compare/corners', { params })
+      comparison.value = data
     } catch (e) {
       error.value = e.message
     } finally {
@@ -143,8 +195,10 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     activeLap, refLap, activeTelemetry, refTelemetry,
     corners, delta, activeCorner, cursorDistance,
     loading, error, sessionId, fastestLap,
+    loadedSessions, comparison, driverName, drivers, tracks,
     fetchSessions, loadSession, fetchLaps,
     selectActiveLap, selectRefLap, fetchCorners, loadDelta,
     setCursorDistance, setActiveCorner,
+    fetchLoadedSessions, updateDriver, fetchComparison,
   }
 })
