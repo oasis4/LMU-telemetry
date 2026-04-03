@@ -6,6 +6,8 @@ import { useTelemetryStore } from '../stores/telemetry.js'
 const store = useTelemetryStore()
 const router = useRouter()
 const driverInput = ref('')
+const dragging = ref(false)
+const fileInput = ref(null)
 
 onMounted(() => {
   store.fetchSessions()
@@ -21,6 +23,40 @@ async function openSession(filename) {
 
 function goToCompare() {
   router.push({ name: 'compare' })
+}
+
+function triggerUpload() {
+  fileInput.value?.click()
+}
+
+async function handleFiles(files) {
+  for (const file of files) {
+    if (!file.name.toLowerCase().endsWith('.duckdb')) continue
+    const result = await store.uploadFile(file, driverInput.value.trim())
+    if (result) {
+      router.push({ name: 'laps', params: { sessionId: result.session_id } })
+      return
+    }
+  }
+}
+
+function onFileChange(e) {
+  if (e.target.files?.length) handleFiles(e.target.files)
+  e.target.value = ''
+}
+
+function onDrop(e) {
+  dragging.value = false
+  if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files)
+}
+
+function onDragOver(e) {
+  e.preventDefault()
+  dragging.value = true
+}
+
+function onDragLeave() {
+  dragging.value = false
 }
 </script>
 
@@ -44,10 +80,9 @@ function goToCompare() {
       </div>
 
       <div class="session-list">
-        <div v-if="store.loading" class="loading">Loading…</div>
-        <div v-else-if="store.sessions.length === 0" class="empty">
-          <p>No .duckdb files found.</p>
-          <p class="text-muted">Set <code>TELEMETRY_DIR</code> env variable to your telemetry folder.</p>
+        <div v-if="store.sessions.length === 0 && !store.loading" class="empty">
+          <p>No sessions yet.</p>
+          <p class="text-muted">Upload .duckdb files to get started.</p>
         </div>
         <button
           v-for="s in store.sessions"
@@ -80,10 +115,31 @@ function goToCompare() {
         </div>
       </div>
     </div>
-    <div class="hero-area">
+
+    <!-- Main area: upload zone -->
+    <div
+      class="hero-area"
+      :class="{ 'drag-over': dragging }"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop"
+    >
+      <!-- Loading state handled by global overlay in App.vue -->
+
       <div class="hero-content">
         <h1>LMU <span class="text-blue">Telemetry</span> Analyzer</h1>
-        <p class="text-muted">Select a session to begin analysis</p>
+        <p class="text-muted">Drop .duckdb files here or click to upload</p>
+
+        <!-- Upload zone -->
+        <div class="upload-zone" @click="triggerUpload">
+          <input ref="fileInput" type="file" accept=".duckdb" multiple hidden @change="onFileChange" />
+          <div class="upload-icon">📂</div>
+          <div class="upload-label">Drop .duckdb files or <span class="text-blue">browse</span></div>
+          <div class="upload-hint text-muted">Supports Le Mans Ultimate telemetry files</div>
+        </div>
+
+        <div v-if="store.error" class="error-msg">{{ store.error }}</div>
+
         <div class="features">
           <div class="feature">
             <div class="feature-icon">📊</div>
@@ -254,21 +310,22 @@ function goToCompare() {
   text-align: center;
   color: var(--text-muted);
 }
-.empty code {
-  background: var(--bg-tertiary);
-  padding: 2px 6px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--accent-blue);
-}
 .hero-area {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  transition: background 0.2s;
+}
+.hero-area.drag-over {
+  background: rgba(59, 130, 246, 0.06);
+  outline: 2px dashed var(--accent-blue);
+  outline-offset: -12px;
 }
 .hero-content {
   text-align: center;
+  max-width: 520px;
 }
 .hero-content h1 {
   font-size: 36px;
@@ -277,8 +334,43 @@ function goToCompare() {
   margin-bottom: 8px;
 }
 .hero-content > p {
-  margin-bottom: 40px;
+  margin-bottom: 24px;
 }
+
+/* Upload zone */
+.upload-zone {
+  border: 2px dashed var(--border);
+  padding: 32px 24px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 24px;
+}
+.upload-zone:hover {
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.04);
+}
+.upload-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+.upload-label {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.upload-hint {
+  font-size: 11px;
+}
+
+/* Error */
+.error-msg {
+  color: var(--negative);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 8px 12px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
 .features {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -62,7 +62,7 @@ CHANNEL_MAP: dict[str, str] = {
 
 def _clean(name: str) -> str:
     """Lowercase, strip, collapse whitespace/underscores."""
-    return re.sub(r"[\s_]+", "_", name.strip().lower())
+    return re.sub(r"[\s_]+", "_", str(name).strip().lower())
 
 
 def _match_channel(raw: str) -> str | None:

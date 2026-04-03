@@ -148,8 +148,12 @@ class LapProcessor:
         lap_raw = sess.get_channel("lap")
         norm_raw = sess.get_channel("normalized_lap")
         dist_raw = sess.get_channel("lap_distance")
-        lat_raw = sess.get_channel("lat") or sess.get_channel("pos_x")
-        lon_raw = sess.get_channel("lon") or sess.get_channel("pos_y")
+        lat_raw = sess.get_channel("lat")
+        if lat_raw is None:
+            lat_raw = sess.get_channel("pos_x")
+        lon_raw = sess.get_channel("lon")
+        if lon_raw is None:
+            lon_raw = sess.get_channel("pos_y")
         sector_raw = sess.get_channel("sector")
 
         # Determine dominant sample count (largest available array)

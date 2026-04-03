@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from .corner_detector import detect_corners
@@ -48,7 +48,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TELEMETRY_DIR = os.environ.get("TELEMETRY_DIR", str(Path.home() / "Telemetry"))
+TELEMETRY_DIR = os.environ.get("TELEMETRY_DIR", str(Path(__file__).resolve().parent.parent / "data"))
+
+# Ensure the telemetry directory exists
+Path(TELEMETRY_DIR).mkdir(parents=True, exist_ok=True)
 
 # In-memory session store:  session_id → (DuckDBSession, LapProcessor, driver_name)
 _sessions: dict[str, tuple[DuckDBSession, LapProcessor, str]] = {}
@@ -79,6 +82,49 @@ def list_sessions():
                 track=f.stem,
             ))
     return result
+
+
+@app.post("/api/upload", response_model=SessionInfo)
+async def upload_session(file: UploadFile = File(...), driver: str = ""):
+    """Upload a .duckdb file, save it, and load it as a session."""
+    if not file.filename or not file.filename.lower().endswith(".duckdb"):
+        raise HTTPException(400, "Only .duckdb files are supported.")
+    safe_name = os.path.basename(file.filename)
+    if safe_name != file.filename or ".." in file.filename:
+        raise HTTPException(400, "Invalid filename.")
+
+    dest = Path(TELEMETRY_DIR) / safe_name
+    # Read file contents (limit 500 MB)
+    MAX_SIZE = 500 * 1024 * 1024
+    content = await file.read()
+    if len(content) > MAX_SIZE:
+        raise HTTPException(400, "File too large (max 500 MB).")
+    dest.write_bytes(content)
+
+    # Now load via normal path
+    try:
+        sess = DuckDBSession(str(dest.resolve()))
+    except Exception as exc:
+        # Clean up bad file
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, f"Cannot open DuckDB: {exc}") from exc
+
+    proc = LapProcessor(sess)
+    laps = proc.process()
+    sid = uuid.uuid4().hex[:12]
+    meta = sess.session_metadata()
+    driver_name = driver.strip() or meta.get("driver", "") or "Unknown"
+    _sessions[sid] = (sess, proc, driver_name)
+
+    return SessionInfo(
+        session_id=sid,
+        filename=safe_name,
+        track=meta.get("track", ""),
+        car=meta.get("car", ""),
+        driver=driver_name,
+        date=meta.get("date", ""),
+        lap_count=len(laps),
+    )
 
 
 @app.post("/api/load", response_model=SessionInfo)

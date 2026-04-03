@@ -1,6 +1,9 @@
 <script setup>
 import { onMounted, ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useTelemetryStore } from '../stores/telemetry.js'
+
+const router = useRouter()
 
 const store = useTelemetryStore()
 const selectedTrack = ref('')
@@ -64,6 +67,7 @@ const filteredTips = computed(() => {
   <div class="compare-layout">
     <!-- Header -->
     <div class="compare-header">
+      <button class="btn-back" @click="router.push({ name: 'sessions' })">← Sessions</button>
       <h2>Driver Comparison</h2>
       <div class="header-controls">
         <label class="track-label">
@@ -188,12 +192,30 @@ const filteredTips = computed(() => {
 .compare-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 16px;
+}
+.btn-back {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-sans);
+}
+.btn-back:hover {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
 }
 .compare-header h2 {
   font-size: 16px;
   font-weight: 600;
+  flex: 1;
+}
+.header-controls {
+  margin-left: auto;
 }
 .header-controls {
   display: flex;

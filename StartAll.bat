@@ -38,7 +38,7 @@ if errorlevel 1 (
 )
 
 rem Start backend in background
-echo Starting backend on port 8000...
+echo Starting backend on port 8001...
 start "LMU-Backend" %PY_CMD% -m uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload
 
 rem Check if npm is available for frontend
@@ -46,7 +46,7 @@ where npm >nul 2>nul
 if errorlevel 1 (
     echo.
     echo NOTE: npm not found. Install Node.js to run the frontend dev server.
-    echo The backend API is running at http://localhost:8000
+    echo The backend API is running at http://localhost:8001
     echo.
     pause
     goto :eof
@@ -95,7 +95,7 @@ if errorlevel 1 (
 echo.
 echo Services started!
 echo   Frontend: http://localhost:3000
-echo   Backend:  http://localhost:8000
+echo   Backend:  http://localhost:8001
 echo.
 echo Run "docker compose logs -f" to see logs.
 echo Run "docker compose down" to stop.
