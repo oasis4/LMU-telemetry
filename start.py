@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 import tkinter as tk
@@ -178,8 +179,16 @@ class LauncherApp:
             self._reset_buttons()
             return
 
-        # Wait briefly, then open browser
-        time.sleep(2)
+        # Wait for backend to be ready (up to 30 s)
+        self._set_status("Waiting for backend…")
+        if not self._wait_for_port(f"http://localhost:{BACKEND_PORT}/api/sessions", 30):
+            self._set_status("⚠  Backend slow to start — opening browser anyway…")
+
+        # Wait for frontend to be ready (up to 20 s)
+        self._set_status("Waiting for frontend…")
+        if not self._wait_for_port(f"http://localhost:{FRONTEND_PORT}/", 20):
+            self._set_status("⚠  Frontend slow to start — opening browser anyway…")
+
         webbrowser.open(BROWSER_URL)
         self._set_status(
             f"✅  Running — Backend :{BACKEND_PORT}  |  Frontend :{FRONTEND_PORT}"
@@ -194,6 +203,21 @@ class LauncherApp:
         self.status_var.set("Stopped.")
 
     # ---- Helpers ----------------------------------------------------------
+
+    @staticmethod
+    def _wait_for_port(url: str, timeout: int = 30) -> bool:
+        """Poll *url* until it responds with HTTP 200 (or *timeout* expires)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    if resp.status < 500:
+                        return True
+            except Exception:
+                pass
+            time.sleep(0.5)
+        return False
 
     @staticmethod
     def _kill(proc: subprocess.Popen | None) -> None:

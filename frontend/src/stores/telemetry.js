@@ -6,6 +6,25 @@ function log(tag, ...args) {
   console.log(`[telemetry:${tag}]`, ...args)
 }
 
+/** Retry wrapper — retries on 502/503/network errors (up to 3 attempts). */
+async function withRetry(fn, retries = 3, delayMs = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      const status = e.response?.status
+      const isRetryable = !status || status === 502 || status === 503
+      if (isRetryable && i < retries - 1) {
+        log('retry', `attempt ${i + 1} failed (${status || 'network'}), retrying in ${delayMs}ms…`)
+        await new Promise(r => setTimeout(r, delayMs))
+        delayMs *= 2
+        continue
+      }
+      throw e
+    }
+  }
+}
+
 export const useTelemetryStore = defineStore('telemetry', () => {
   // State
   const sessions = ref([])
@@ -69,7 +88,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     log('sessions', 'fetching…')
     error.value = null
     try {
-      const { data } = await axios.get('/api/sessions')
+      const { data } = await withRetry(() => axios.get('/api/sessions'))
       sessions.value = data
       log('sessions', `found ${data.length} files`)
     } catch (e) {
@@ -85,7 +104,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     try {
       const params = { filename }
       if (driver) params.driver = driver
-      const { data } = await axios.post('/api/load', null, { params })
+      const { data } = await withRetry(() => axios.post('/api/load', null, { params }))
       currentSession.value = data
       log('load', `session ${data.session_id} opened — ${data.track} / ${data.car}`)
 
@@ -107,7 +126,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   async function fetchLoadedSessions() {
     log('loaded', 'fetching…')
     try {
-      const { data } = await axios.get('/api/loaded')
+      const { data } = await withRetry(() => axios.get('/api/loaded'))
       loadedSessions.value = data
       log('loaded', `${data.length} sessions loaded`)
     } catch (e) {
@@ -119,9 +138,9 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   async function updateDriver(sid, driver) {
     log('driver', `updating ${sid} → ${driver}`)
     try {
-      await axios.patch(`/api/session/${sid}/driver`, null, {
+      await withRetry(() => axios.patch(`/api/session/${sid}/driver`, null, {
         params: { driver },
-      })
+      }))
       await fetchLoadedSessions()
     } catch (e) {
       error.value = e.message
@@ -134,7 +153,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     setProgress(10, 'Comparing drivers…')
     try {
       const params = track ? { track } : {}
-      const { data } = await axios.get('/api/compare/corners', { params })
+      const { data } = await withRetry(() => axios.get('/api/compare/corners', { params }))
       comparison.value = data
       log('compare', `got ${data.corners?.length || 0} corners, ${data.drivers?.length || 0} drivers`)
       setProgress(100, 'Done')
@@ -196,7 +215,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     }
     log('laps', `fetching for session ${sessionId.value}…`)
     try {
-      const { data } = await axios.get(`/api/laps/${sessionId.value}`)
+      const { data } = await withRetry(() => axios.get(`/api/laps/${sessionId.value}`))
       laps.value = data.laps
       theoreticalBestMs.value = data.theoretical_best_ms
       theoreticalSectors.value = data.theoretical_sectors
@@ -236,7 +255,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     log('activeLap', `selecting lap ${lapNumber}…`)
     if (loading.value) setProgress(Math.max(loadingProgress.value, 60), 'Loading telemetry…')
     try {
-      const { data } = await axios.get(`/api/telemetry/${sessionId.value}/${lapNumber}`)
+      const { data } = await withRetry(() => axios.get(`/api/telemetry/${sessionId.value}/${lapNumber}`))
       activeTelemetry.value = data
       log('activeLap', `got ${data.distance?.length || 0} telemetry points`)
 
@@ -268,9 +287,9 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     if (!isNested) setProgress(10, 'Loading reference lap…')
     try {
       const [telRes, deltaRes] = await Promise.all([
-        axios.get(`/api/telemetry/${sessionId.value}/${lapNumber}`),
+        withRetry(() => axios.get(`/api/telemetry/${sessionId.value}/${lapNumber}`)),
         activeLap.value
-          ? axios.get(`/api/delta/${sessionId.value}/${activeLap.value.lap_number}/${lapNumber}`)
+          ? withRetry(() => axios.get(`/api/delta/${sessionId.value}/${activeLap.value.lap_number}/${lapNumber}`))
           : Promise.resolve({ data: null }),
       ])
       refTelemetry.value = telRes.data
@@ -290,9 +309,9 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     if (!sessionId.value) return
     log('corners', `fetching for lap ${lapNumber}…`)
     try {
-      const { data } = await axios.get(`/api/corners/${sessionId.value}`, {
+      const { data } = await withRetry(() => axios.get(`/api/corners/${sessionId.value}`, {
         params: { lap_number: lapNumber },
-      })
+      }))
       corners.value = data.corners
       log('corners', `got ${data.corners.length} corners`)
     } catch (e) {
@@ -318,9 +337,9 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     const isNested = loading.value
     if (!isNested) setProgress(10, 'Computing delta…')
     try {
-      const { data } = await axios.get(
+      const { data } = await withRetry(() => axios.get(
         `/api/delta/${sessionId.value}/${activeLap.value.lap_number}/${refLap.value.lap_number}`
-      )
+      ))
       delta.value = data
       log('delta', 'done')
       if (!isNested) setProgress(100, 'Done')
