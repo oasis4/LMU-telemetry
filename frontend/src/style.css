@@ -92,6 +92,17 @@ th:first-child, td:first-child { text-align: left; }
   border-color: var(--accent-blue);
   color: #fff;
 }
+.btn-primary {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #fff;
+  font-weight: 600;
+}
+.btn-primary:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
 
 /* Loading spinner */
 .loading {

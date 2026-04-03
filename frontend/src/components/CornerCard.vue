@@ -36,7 +36,8 @@ const deltaClass = computed(() => {
 })
 
 // ---- Sliced data for this corner ----
-const PADDING_M = 80 // meters before/after corner
+// Padding in meters before entry and after exit for chart context
+const PADDING_M = 80
 
 function sliceChannel(telemetry, channel) {
   if (!telemetry?.distance?.length) return { dist: [], vals: [] }
