@@ -61,6 +61,12 @@ const filteredTips = computed(() => {
   }
   return tips
 })
+
+async function updateDriverName(sessionId, newName) {
+  const name = newName.trim()
+  if (!name) return
+  await store.updateDriver(sessionId, name)
+}
 </script>
 
 <template>
@@ -85,7 +91,25 @@ const filteredTips = computed(() => {
 
     <div v-if="!store.comparison && !store.loading" class="empty-state">
       <p>Load at least 2 sessions with different driver names, then click <strong>Compare</strong>.</p>
-      <p class="text-muted">Loaded drivers: {{ store.drivers.join(', ') || 'none' }}</p>
+      <p class="text-muted" style="margin-top: 8px;">
+        Loaded drivers: <strong>{{ store.drivers.join(', ') || 'none' }}</strong>
+      </p>
+      <p v-if="store.drivers.some(d => d === 'Unknown')" class="driver-warning">
+        Some drivers show as "Unknown". Enter your driver name in the Sessions page before loading.
+      </p>
+      <!-- Quick driver rename -->
+      <div v-if="store.loadedSessions.length" class="quick-rename">
+        <h4>Rename Drivers</h4>
+        <div v-for="ls in store.loadedSessions" :key="ls.session_id" class="rename-row">
+          <span class="rename-track">{{ ls.filename.replace(/\.duckdb$/i, '').substring(0, 30) }}</span>
+          <input
+            class="rename-input"
+            :value="ls.driver"
+            @change="updateDriverName(ls.session_id, $event.target.value)"
+            placeholder="Enter driver name…"
+          />
+        </div>
+      </div>
     </div>
 
     <div v-if="store.comparison" class="compare-body">
@@ -374,5 +398,52 @@ const filteredTips = computed(() => {
   color: var(--accent-orange);
   padding-left: 16px;
   line-height: 1.5;
+}
+
+/* Driver warning & quick rename */
+.driver-warning {
+  color: var(--accent-orange);
+  font-size: 13px;
+  margin-top: 8px;
+}
+.quick-rename {
+  margin-top: 24px;
+  text-align: left;
+  max-width: 400px;
+  display: inline-block;
+}
+.quick-rename h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+.rename-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.rename-track {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  min-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rename-input {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  flex: 1;
+  border-radius: 4px;
+}
+.rename-input::placeholder {
+  color: var(--text-muted);
 }
 </style>

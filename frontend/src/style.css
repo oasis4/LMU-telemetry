@@ -7,8 +7,8 @@
   --bg-tertiary: #161619;
   --border: #1e1e2e;
   --text-primary: #e0e0e0;
-  --text-secondary: #888;
-  --text-muted: #555;
+  --text-secondary: #999;
+  --text-muted: #666;
   --accent-blue: #3b82f6;
   --accent-orange: #f97316;
   --positive: #22c55e;
@@ -29,7 +29,7 @@ html, body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -56,10 +56,10 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
 }
 th, td {
-  padding: 6px 12px;
+  padding: 8px 14px;
   text-align: right;
   border-bottom: 1px solid var(--border);
 }
@@ -67,7 +67,7 @@ th {
   color: var(--text-secondary);
   font-weight: 500;
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.5px;
 }
 th:first-child, td:first-child { text-align: left; }
@@ -77,11 +77,12 @@ th:first-child, td:first-child { text-align: left; }
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-primary);
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 8px 16px;
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.15s;
   font-family: var(--font-sans);
+  border-radius: 4px;
 }
 .btn:hover {
   border-color: var(--accent-blue);
@@ -111,7 +112,7 @@ th:first-child, td:first-child { text-align: left; }
   justify-content: center;
   height: 100%;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 15px;
 }
 
 /* Tab bar */
@@ -125,8 +126,8 @@ th:first-child, td:first-child { text-align: left; }
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--text-secondary);
-  padding: 8px 16px;
-  font-size: 11px;
+  padding: 10px 18px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   text-transform: uppercase;

@@ -14,9 +14,12 @@ class SessionInfo(BaseModel):
     filename: str
     track: str = ""
     car: str = ""
+    car_class: str = ""
+    session_type: str = ""
     driver: str = ""
     date: str = ""
     lap_count: int = 0
+    best_time: float = 0.0  # best lap time in seconds (0 = unknown)
 
 
 class SectorTimes(BaseModel):
@@ -38,6 +41,7 @@ class LapListResponse(BaseModel):
     laps: list[LapSummary]
     theoretical_best_ms: float | None = None
     theoretical_sectors: SectorTimes = Field(default_factory=SectorTimes)
+    composite_available: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +58,7 @@ class TelemetryData(BaseModel):
     rpm: list[float]
     lat: list[float]
     lon: list[float]
+    time: list[float] = Field(default_factory=list)
     lap_time_ms: float = 0.0
     sectors: list[float] = Field(default_factory=list)
 
@@ -135,6 +140,39 @@ class LoadedSessionInfo(BaseModel):
     track: str
     car: str
     lap_count: int
+
+
+# ---------------------------------------------------------------------------
+# Coaching / Dashboard analysis
+# ---------------------------------------------------------------------------
+
+class SegmentAnalysis(BaseModel):
+    """Delta and error info for one segment (corner)."""
+    corner_id: int
+    corner_name: str
+    distance_start: float
+    distance_apex: float
+    distance_end: float
+    delta_s: float  # time delta in seconds (positive = losing)
+    error_type: str | None = None  # 'late_brake', 'early_brake', 'low_min_speed', 'bad_traction', None
+    error_label: str = ""
+    explanation: str = ""
+    recommendation: str = ""
+
+
+class FocusZone(BaseModel):
+    """Zone with the largest time loss."""
+    distance_start: float
+    distance_end: float
+    delta_s: float
+    corner_name: str
+
+
+class CoachingAnalysis(BaseModel):
+    """Full coaching analysis for an active vs ref lap pair."""
+    segments: list[SegmentAnalysis]
+    focus_zone: FocusZone | None = None
+    main_message: str = ""
 
 
 # ---------------------------------------------------------------------------

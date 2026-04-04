@@ -32,6 +32,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   const laps = ref([])
   const theoreticalBestMs = ref(null)
   const theoreticalSectors = ref({})
+  const compositeAvailable = ref(false)
   const activeLap = ref(null)
   const refLap = ref(null)
   const activeTelemetry = ref(null)
@@ -51,6 +52,10 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   const loadedSessions = ref([])
   const comparison = ref(null)
   const driverName = ref('')
+  const driverBests = ref([])
+
+  // Coaching analysis state
+  const coaching = ref(null)
 
   function setProgress(pct, msg) {
     loadingProgress.value = Math.min(100, Math.max(0, pct))
@@ -219,6 +224,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
       laps.value = data.laps
       theoreticalBestMs.value = data.theoretical_best_ms
       theoreticalSectors.value = data.theoretical_sectors
+      compositeAvailable.value = data.composite_available || false
       log('laps', `got ${data.laps.length} laps`)
 
       if (loading.value) setProgress(Math.max(loadingProgress.value, 50), 'Selecting fastest lap…')
@@ -261,9 +267,40 @@ export const useTelemetryStore = defineStore('telemetry', () => {
 
       if (loading.value) setProgress(Math.max(loadingProgress.value, 75), 'Detecting corners…')
       await _fetchCornersInternal(lapNumber)
+
+      // Recompute delta when active lap changes and ref is set
+      if (refLap.value && refTelemetry.value) {
+        await _recomputeDelta(lapNumber)
+      }
     } catch (e) {
       log('activeLap', 'ERROR', e.message)
       error.value = e.message
+    }
+  }
+
+  /** Recompute delta for current active lap vs current ref. */
+  async function _recomputeDelta(activeLapNumber) {
+    if (!refLap.value || !refTelemetry.value) return
+    log('delta', `recomputing for lap ${activeLapNumber} vs ref ${refLap.value.lap_number}…`)
+    if (refLap.value.lap_number === 0 || refLap.value._crossSession) {
+      // Composite or cross-session: client-side delta
+      if (activeTelemetry.value?.time?.length && refTelemetry.value?.time?.length) {
+        delta.value = computeClientDelta(activeTelemetry.value, refTelemetry.value)
+      } else {
+        delta.value = computeClientDeltaFromSpeed(activeTelemetry.value, refTelemetry.value)
+      }
+    } else {
+      try {
+        const { data } = await withRetry(() =>
+          axios.get(`/api/delta/${sessionId.value}/${activeLapNumber}/${refLap.value.lap_number}`)
+        )
+        delta.value = data
+      } catch (e) {
+        // Fallback to client-side
+        if (activeTelemetry.value?.time?.length && refTelemetry.value?.time?.length) {
+          delta.value = computeClientDelta(activeTelemetry.value, refTelemetry.value)
+        }
+      }
     }
   }
 
@@ -281,19 +318,39 @@ export const useTelemetryStore = defineStore('telemetry', () => {
 
   async function selectRefLap(lapNumber) {
     if (!sessionId.value) return
-    refLap.value = laps.value.find(l => l.lap_number === lapNumber)
     log('refLap', `selecting ref lap ${lapNumber}…`)
     const isNested = loading.value
     if (!isNested) setProgress(10, 'Loading reference lap…')
     try {
-      const [telRes, deltaRes] = await Promise.all([
-        withRetry(() => axios.get(`/api/telemetry/${sessionId.value}/${lapNumber}`)),
-        activeLap.value
-          ? withRetry(() => axios.get(`/api/delta/${sessionId.value}/${activeLap.value.lap_number}/${lapNumber}`))
-          : Promise.resolve({ data: null }),
-      ])
-      refTelemetry.value = telRes.data
-      delta.value = deltaRes.data
+      if (lapNumber === 0) {
+        // Composite best lap — fetch telemetry only, delta computed client-side
+        refLap.value = {
+          lap_number: 0,
+          lap_time_ms: theoreticalBestMs.value || 0,
+          sectors: theoreticalSectors.value,
+          gap_to_best_ms: 0,
+          valid: true,
+        }
+        const { data: telData } = await withRetry(() =>
+          axios.get(`/api/telemetry/${sessionId.value}/0`)
+        )
+        refTelemetry.value = telData
+        if (activeTelemetry.value?.time?.length && telData.time?.length) {
+          delta.value = computeClientDelta(activeTelemetry.value, telData)
+        } else {
+          delta.value = null
+        }
+      } else {
+        refLap.value = laps.value.find(l => l.lap_number === lapNumber)
+        const [telRes, deltaRes] = await Promise.all([
+          withRetry(() => axios.get(`/api/telemetry/${sessionId.value}/${lapNumber}`)),
+          activeLap.value
+            ? withRetry(() => axios.get(`/api/delta/${sessionId.value}/${activeLap.value.lap_number}/${lapNumber}`))
+            : Promise.resolve({ data: null }),
+        ])
+        refTelemetry.value = telRes.data
+        delta.value = deltaRes.data
+      }
       log('refLap', `got telemetry + delta`)
       if (!isNested) setProgress(100, 'Done')
     } catch (e) {
@@ -302,6 +359,155 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     } finally {
       if (!isNested) clearProgress()
     }
+  }
+
+  /**
+   * Load a reference lap from a DIFFERENT session (cross-session comparison).
+   * Computes delta client-side since the backend delta endpoint is same-session only.
+   */
+  async function loadCrossSessionRef(refSid, lapNumber) {
+    log('crossRef', `loading session=${refSid} lap=${lapNumber}…`)
+    const isNested = loading.value
+    if (!isNested) setProgress(10, 'Loading cross-session reference…')
+    try {
+      // Fetch ref laps to get lap_time_ms
+      const { data: lapData } = await withRetry(() => axios.get(`/api/laps/${refSid}`))
+      const lapInfo = lapData.laps.find(l => l.lap_number === lapNumber)
+      if (!lapInfo) throw new Error(`Lap ${lapNumber} not found in session ${refSid}`)
+      refLap.value = lapInfo
+
+      if (!isNested) setProgress(40, 'Loading reference telemetry…')
+      const { data: telData } = await withRetry(() => axios.get(`/api/telemetry/${refSid}/${lapNumber}`))
+      refTelemetry.value = telData
+
+      // Compute delta client-side from time arrays
+      if (!isNested) setProgress(70, 'Computing delta…')
+      if (activeTelemetry.value?.time?.length && telData.time?.length) {
+        delta.value = computeClientDelta(activeTelemetry.value, telData)
+        log('crossRef', `computed client-side delta (${delta.value.distance.length} points)`)
+      } else {
+        // Fallback: approximate time from distance/speed
+        delta.value = computeClientDeltaFromSpeed(activeTelemetry.value, telData)
+        log('crossRef', `computed speed-based delta (${delta.value.distance.length} points)`)
+      }
+
+      if (!isNested) setProgress(100, 'Done')
+    } catch (e) {
+      log('crossRef', 'ERROR', e.message)
+      error.value = e.message
+    } finally {
+      if (!isNested) clearProgress()
+    }
+  }
+
+  /**
+   * Load best lap from another driver's session as reference.
+   * Loads the session on the backend, finds fastest lap, sets as cross-session ref.
+   */
+  async function loadDriverBestRef(filename, driver) {
+    log('driverBestRef', `loading ${filename} (${driver})…`)
+    const isNested = loading.value
+    if (!isNested) setProgress(10, 'Loading driver best…')
+    try {
+      // Load that session (without changing current view)
+      const { data: sess } = await withRetry(() =>
+        axios.post('/api/load', null, { params: { filename, driver } })
+      )
+      if (!isNested) setProgress(40, 'Finding fastest lap…')
+      const { data: lapData } = await withRetry(() =>
+        axios.get(`/api/laps/${sess.session_id}`)
+      )
+      const fastest = lapData.laps.reduce((b, l) => l.lap_time_ms < b.lap_time_ms ? l : b)
+      if (!isNested) setProgress(60, 'Loading reference telemetry…')
+      await loadCrossSessionRef(sess.session_id, fastest.lap_number)
+      // Mark as cross-session for delta recomputation
+      if (refLap.value) refLap.value._crossSession = true
+      if (!isNested) setProgress(100, 'Done')
+    } catch (e) {
+      log('driverBestRef', 'ERROR', e.message)
+      error.value = e.message
+    } finally {
+      if (!isNested) clearProgress()
+    }
+  }
+
+  async function fetchDriverBests(track) {
+    if (!track) return
+    log('driverBests', `fetching for track=${track}…`)
+    try {
+      const { data } = await withRetry(() =>
+        axios.get('/api/driver-bests', { params: { track } })
+      )
+      driverBests.value = data
+      log('driverBests', `got ${data.length} driver bests`)
+    } catch (e) {
+      log('driverBests', 'ERROR', e.message)
+    }
+  }
+
+  async function deleteSession(filename) {
+    log('delete', `deleting ${filename}…`)
+    try {
+      await withRetry(() =>
+        axios.delete('/api/session/delete', { params: { filename } })
+      )
+      sessions.value = sessions.value.filter(s => s.filename !== filename)
+      log('delete', 'done')
+    } catch (e) {
+      log('delete', 'ERROR', e.message)
+      error.value = e.message
+    }
+  }
+
+  /** Compute delta from time(distance) arrays. */
+  function computeClientDelta(active, ref) {
+    const dA = active.distance, tA = active.time
+    const dR = ref.distance, tR = ref.time
+    const maxDist = Math.min(dA[dA.length - 1], dR[dR.length - 1])
+    const resolution = 1.0
+    const dist = [], dt = []
+    for (let d = 0; d < maxDist; d += resolution) {
+      dist.push(d)
+      const ta = lerpArr(dA, tA, d)
+      const tr = lerpArr(dR, tR, d)
+      dt.push(ta - tr) // positive = active is slower
+    }
+    return { distance: dist, delta: dt }
+  }
+
+  /** Approximate delta from speed when time arrays not available. */
+  function computeClientDeltaFromSpeed(active, ref) {
+    const dA = active.distance, sA = active.speed
+    const dR = ref.distance, sR = ref.speed
+    const maxDist = Math.min(dA[dA.length - 1], dR[dR.length - 1])
+    const resolution = 1.0
+    const dist = [], dt = []
+    let cumDelta = 0
+    for (let d = 0; d < maxDist; d += resolution) {
+      const va = lerpArr(dA, sA, d) / 3.6 // km/h → m/s
+      const vr = lerpArr(dR, sR, d) / 3.6
+      // time to cover 1m at this speed
+      const dtA = va > 0.1 ? resolution / va : 0
+      const dtR = vr > 0.1 ? resolution / vr : 0
+      cumDelta += dtA - dtR
+      dist.push(d)
+      dt.push(cumDelta)
+    }
+    return { distance: dist, delta: dt }
+  }
+
+  /** Linear interpolation: find value at distance d in sorted arrays. */
+  function lerpArr(dArr, vArr, d) {
+    if (d <= dArr[0]) return vArr[0]
+    if (d >= dArr[dArr.length - 1]) return vArr[vArr.length - 1]
+    // Binary search
+    let lo = 0, hi = dArr.length - 1
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1
+      if (dArr[mid] <= d) lo = mid; else hi = mid
+    }
+    const t = (d - dArr[lo]) / (dArr[hi] - dArr[lo] || 1)
+    return vArr[lo] + t * (vArr[hi] - vArr[lo])
   }
 
   // Internal — does NOT touch loading
@@ -359,15 +565,42 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     activeCorner.value = corner
   }
 
+  async function fetchCoaching() {
+    if (!sessionId.value || !activeLap.value || !refLap.value) {
+      log('coaching', 'skipped — missing session/active/ref')
+      return
+    }
+    log('coaching', `fetching for laps ${activeLap.value.lap_number} vs ${refLap.value.lap_number}`)
+    const isNested = loading.value
+    if (!isNested) setProgress(10, 'Analysiere Coaching…')
+    try {
+      const { data } = await withRetry(() => axios.get(
+        `/api/coaching/${sessionId.value}/${activeLap.value.lap_number}/${refLap.value.lap_number}`
+      ))
+      coaching.value = data
+      log('coaching', `got ${data.segments?.length || 0} segments`)
+      if (!isNested) setProgress(100, 'Done')
+    } catch (e) {
+      log('coaching', 'ERROR', e.message)
+      error.value = e.message
+    } finally {
+      if (!isNested) clearProgress()
+    }
+  }
+
   return {
     sessions, currentSession, laps, theoreticalBestMs, theoreticalSectors,
+    compositeAvailable,
     activeLap, refLap, activeTelemetry, refTelemetry,
     corners, delta, activeCorner, cursorDistance,
     loading, loadingProgress, loadingMessage, error, sessionId, fastestLap,
     loadedSessions, comparison, driverName, drivers, tracks,
+    coaching, driverBests,
     fetchSessions, loadSession, fetchLaps, uploadFile,
-    selectActiveLap, selectRefLap, fetchCorners, loadDelta,
+    selectActiveLap, selectRefLap, loadCrossSessionRef, loadDriverBestRef,
+    fetchCorners, loadDelta,
     setCursorDistance, setActiveCorner,
     fetchLoadedSessions, updateDriver, fetchComparison,
+    fetchCoaching, fetchDriverBests, deleteSession,
   }
 })

@@ -37,16 +37,28 @@ const refPath = computed(() => {
   return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x},${ys[i]}`).join(' ')
 })
 
-// Corner markers
+// Corner markers with delta values
 const cornerMarkers = computed(() => {
   const t = store.activeTelemetry
   if (!t || !t.distance?.length || !t.lat?.length) return []
   const xs = normalise(t.lat, width.value)
   const ys = normalise(t.lon, height.value)
+  const d = store.delta
   return store.corners.map(c => {
-    const idx = t.distance.findIndex(d => d >= c.distance_apex)
+    const idx = t.distance.findIndex(dd => dd >= c.distance_apex)
     if (idx < 0) return null
-    return { ...c, x: xs[idx], y: ys[idx] }
+    let deltaAtApex = null
+    if (d?.distance?.length) {
+      const di = d.distance.findIndex(dd => dd >= c.distance_apex)
+      if (di >= 0) deltaAtApex = d.delta[di]
+    }
+    const deltaColor = deltaAtApex == null ? '#888'
+      : deltaAtApex > 0.01 ? '#ef4444'
+      : deltaAtApex < -0.01 ? '#22c55e' : '#888'
+    const deltaLabel = deltaAtApex == null ? ''
+      : deltaAtApex > 0 ? `+${deltaAtApex.toFixed(3)}`
+      : deltaAtApex.toFixed(3)
+    return { ...c, x: xs[idx], y: ys[idx], deltaAtApex, deltaColor, deltaLabel }
   }).filter(Boolean)
 })
 
@@ -138,8 +150,8 @@ function onCornerClick(c) {
         :d="refPath"
         fill="none"
         stroke="#f97316"
-        stroke-width="1.5"
-        opacity="0.6"
+        stroke-width="2.5"
+        opacity="0.7"
       />
 
       <!-- Active lap path (drawn on top if no delta) -->
@@ -148,10 +160,10 @@ function onCornerClick(c) {
         :d="activePath"
         fill="none"
         stroke="#3b82f6"
-        stroke-width="2"
+        stroke-width="2.5"
       />
 
-      <!-- Corner markers -->
+      <!-- Corner markers with delta labels -->
       <g
         v-for="m in cornerMarkers"
         :key="'corner-' + m.id"
@@ -159,21 +171,34 @@ function onCornerClick(c) {
         @click="onCornerClick(m)"
       >
         <circle
-          :cx="m.x" :cy="m.y" r="10"
-          :fill="store.activeCorner?.id === m.id ? '#3b82f6' : '#1e1e2e'"
-          stroke="#3b82f6"
-          stroke-width="1"
+          :cx="m.x" :cy="m.y" r="13"
+          :fill="store.activeCorner?.id === m.id ? '#f97316' : m.deltaColor || '#e63946'"
+          :stroke="store.activeCorner?.id === m.id ? '#fff' : 'rgba(0,0,0,0.5)'"
+          stroke-width="1.5"
         />
         <text
           :x="m.x" :y="m.y"
           text-anchor="middle"
           dominant-baseline="central"
-          fill="#e0e0e0"
-          font-size="9"
+          fill="#fff"
+          font-size="10"
           font-family="Inter, sans-serif"
-          font-weight="600"
+          font-weight="700"
         >
           {{ m.id }}
+        </text>
+        <!-- Delta label -->
+        <text
+          v-if="m.deltaLabel"
+          :x="m.x + 18" :y="m.y - 2"
+          text-anchor="start"
+          dominant-baseline="central"
+          :fill="m.deltaColor"
+          font-size="11"
+          font-family="'JetBrains Mono', monospace"
+          font-weight="600"
+        >
+          {{ m.deltaLabel }}
         </text>
       </g>
 
