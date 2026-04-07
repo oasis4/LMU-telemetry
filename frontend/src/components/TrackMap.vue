@@ -6,59 +6,95 @@ const props = defineProps({
   distanceRange: { type: Object, default: null },
 })
 
+const emit = defineEmits(['corner-click'])
+
 const store = useTelemetryStore()
 const svgRef = ref(null)
 const containerRef = ref(null)
 const width = ref(800)
 const height = ref(300)
 
-// Normalise lat/lon to SVG viewport
-function normalise(arr, size, padding = 20) {
-  if (!arr || arr.length === 0) return []
-  const min = Math.min(...arr)
-  const max = Math.max(...arr)
-  const range = max - min || 1
-  return arr.map(v => padding + ((v - min) / range) * (size - 2 * padding))
+// Build shared bounds from ALL traces so active + ref align perfectly.
+// Returns { project(lon, lat) → {x, y} } with aspect-ratio-preserved coords.
+function buildProjection(w, h, padding = 20) {
+  const sources = [store.activeTelemetry, store.refTelemetry].filter(t => t?.lat?.length)
+  if (!sources.length) return null
+
+  let latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity
+  for (const t of sources) {
+    for (let i = 0; i < t.lat.length; i++) {
+      const la = t.lat[i], lo = t.lon[i]
+      if (la < latMin) latMin = la
+      if (la > latMax) latMax = la
+      if (lo < lonMin) lonMin = lo
+      if (lo > lonMax) lonMax = lo
+    }
+  }
+
+  // cos(lat) correction: at this latitude, longitude degrees are shorter
+  const midLat = (latMin + latMax) / 2
+  const cosLat = Math.cos(midLat * Math.PI / 180)
+
+  const latRange = latMax - latMin || 1e-6
+  const lonRange = (lonMax - lonMin) * cosLat || 1e-6
+
+  const drawW = w - 2 * padding
+  const drawH = h - 2 * padding
+  const scale = Math.min(drawW / lonRange, drawH / latRange)
+
+  // Center the track in the viewport
+  const projW = lonRange * scale
+  const projH = latRange * scale
+  const offsetX = padding + (drawW - projW) / 2
+  const offsetY = padding + (drawH - projH) / 2
+
+  return {
+    project(lon, lat) {
+      const x = offsetX + (lon - lonMin) * cosLat * scale
+      const y = offsetY + (latMax - lat) * scale  // invert Y: north = up
+      return { x, y }
+    }
+  }
 }
 
-const activePath = computed(() => {
-  const t = store.activeTelemetry
-  if (!t || !t.lat?.length) return ''
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
-  return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x},${ys[i]}`).join(' ')
-})
+function buildPath(telemetry, proj) {
+  if (!telemetry?.lat?.length || !proj) return ''
+  const parts = []
+  for (let i = 0; i < telemetry.lat.length; i++) {
+    const { x, y } = proj.project(telemetry.lon[i], telemetry.lat[i])
+    parts.push(`${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`)
+  }
+  return parts.join(' ')
+}
 
-const refPath = computed(() => {
-  const t = store.refTelemetry
-  if (!t || !t.lat?.length) return ''
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
-  return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x},${ys[i]}`).join(' ')
-})
+const projection = computed(() => buildProjection(width.value, height.value))
 
-// Corner markers with delta values
+const activePath = computed(() => buildPath(store.activeTelemetry, projection.value))
+const refPath = computed(() => buildPath(store.refTelemetry, projection.value))
+
+// Corner markers with per-corner delta values (time gained/lost IN this corner)
 const cornerMarkers = computed(() => {
   const t = store.activeTelemetry
-  if (!t || !t.distance?.length || !t.lat?.length) return []
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
+  const proj = projection.value
+  if (!t || !t.distance?.length || !t.lat?.length || !proj) return []
   const d = store.delta
   return store.corners.map(c => {
     const idx = t.distance.findIndex(dd => dd >= c.distance_apex)
     if (idx < 0) return null
-    let deltaAtApex = null
+    const { x, y } = proj.project(t.lon[idx], t.lat[idx])
+    let cornerDelta = null
     if (d?.distance?.length) {
-      const di = d.distance.findIndex(dd => dd >= c.distance_apex)
-      if (di >= 0) deltaAtApex = d.delta[di]
+      const si = d.distance.findIndex(dd => dd >= c.distance_start)
+      const ei = d.distance.findIndex(dd => dd >= c.distance_end)
+      if (si >= 0 && ei >= 0) cornerDelta = d.delta[ei] - d.delta[si]
     }
-    const deltaColor = deltaAtApex == null ? '#888'
-      : deltaAtApex > 0.01 ? '#ef4444'
-      : deltaAtApex < -0.01 ? '#22c55e' : '#888'
-    const deltaLabel = deltaAtApex == null ? ''
-      : deltaAtApex > 0 ? `+${deltaAtApex.toFixed(3)}`
-      : deltaAtApex.toFixed(3)
-    return { ...c, x: xs[idx], y: ys[idx], deltaAtApex, deltaColor, deltaLabel }
+    const deltaColor = cornerDelta == null ? '#888'
+      : cornerDelta > 0.005 ? '#ef4444'
+      : cornerDelta < -0.005 ? '#22c55e' : '#888'
+    const deltaLabel = cornerDelta == null ? ''
+      : cornerDelta > 0 ? `+${(cornerDelta * 1000).toFixed(0)}ms`
+      : `${(cornerDelta * 1000).toFixed(0)}ms`
+    return { ...c, x, y, deltaAtApex: cornerDelta, deltaColor, deltaLabel }
   }).filter(Boolean)
 })
 
@@ -66,10 +102,8 @@ const cornerMarkers = computed(() => {
 const deltaSegments = computed(() => {
   const t = store.activeTelemetry
   const d = store.delta
-  if (!t || !t.lat?.length || !d || !d.delta?.length) return []
-
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
+  const proj = projection.value
+  if (!t || !t.lat?.length || !d || !d.delta?.length || !proj) return []
 
   const segments = []
   const step = Math.max(1, Math.floor(t.distance.length / 200))
@@ -78,14 +112,12 @@ const deltaSegments = computed(() => {
     const deltaIdx = d.distance.findIndex(dd => dd >= dist)
     const deltaVal = deltaIdx >= 0 ? d.delta[deltaIdx] : 0
     let color = '#666'
-    if (deltaVal < -0.01) color = '#22c55e' // gaining
-    else if (deltaVal > 0.01) color = '#ef4444' // losing
-    segments.push({
-      x1: xs[i], y1: ys[i],
-      x2: xs[Math.min(i + step, xs.length - 1)],
-      y2: ys[Math.min(i + step, ys.length - 1)],
-      color,
-    })
+    if (deltaVal < -0.01) color = '#22c55e'
+    else if (deltaVal > 0.01) color = '#ef4444'
+    const p1 = proj.project(t.lon[i], t.lat[i])
+    const j = Math.min(i + step, t.lat.length - 1)
+    const p2 = proj.project(t.lon[j], t.lat[j])
+    segments.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color })
   }
   return segments
 })
@@ -93,12 +125,11 @@ const deltaSegments = computed(() => {
 // Cursor dot on track map
 const cursorDot = computed(() => {
   const t = store.activeTelemetry
-  if (!t || !t.distance?.length || store.cursorDistance == null) return null
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
+  const proj = projection.value
+  if (!t || !t.distance?.length || store.cursorDistance == null || !proj) return null
   const idx = t.distance.findIndex(d => d >= store.cursorDistance)
   if (idx < 0) return null
-  return { x: xs[idx], y: ys[idx] }
+  return proj.project(t.lon[idx], t.lat[idx])
 })
 
 // Resize observer
@@ -121,7 +152,7 @@ onBeforeUnmount(() => {
 })
 
 function onCornerClick(c) {
-  store.setActiveCorner(c)
+  emit('corner-click', c)
 }
 </script>
 

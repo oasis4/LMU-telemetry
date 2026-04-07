@@ -108,27 +108,51 @@ def _build_composite(laps: list[LapData]) -> TelemetryData:
     """Build a theoretical best-lap composite by splicing the fastest sector
     from each real lap.  Sectors are identified by cumulative time boundaries
     derived from each lap's ``.sectors`` list and ``.time`` array.
+
+    Only valid laps are used (filters out pit-out, in-laps, formation laps).
     """
-    if not laps:
+    # Filter to valid laps only
+    valid_laps = [l for l in laps if l.valid and l.lap_time_ms > 0]
+    if not valid_laps:
+        valid_laps = laps  # fallback if none marked valid
+    if not valid_laps:
         raise HTTPException(404, "No laps to build composite from.")
 
-    n_sectors = max((len(l.sectors) for l in laps), default=0)
+    n_sectors = max((len(l.sectors) for l in valid_laps), default=0)
     if n_sectors == 0:
         raise HTTPException(400, "No sector data available for composite.")
 
-    # For each sector index, find the lap with the fastest time
+    # Compute median per sector for outlier rejection
+    _sv: list[list[float]] = [[] for _ in range(n_sectors)]
+    for l in valid_laps:
+        for si in range(min(n_sectors, len(l.sectors))):
+            if l.sectors[si] > 0:
+                _sv[si].append(l.sectors[si])
+    _medians = []
+    for sv in _sv:
+        if sv:
+            sv.sort()
+            _medians.append(sv[len(sv) // 2])
+        else:
+            _medians.append(0)
+
+    # For each sector index, find the lap with the fastest time (skip outliers)
     best_lap_per_sector: list[LapData] = []
     best_sector_ms: list[float] = []
     for si in range(n_sectors):
         best_l = None
         best_t = float("inf")
-        for l in laps:
+        median = _medians[si]
+        for l in valid_laps:
             if si < len(l.sectors) and 0 < l.sectors[si] < best_t:
+                # Skip anomalously fast sectors (< 70% of median)
+                if median > 0 and l.sectors[si] < median * 0.7:
+                    continue
                 best_t = l.sectors[si]
                 best_l = l
         if best_l is None:
-            best_l = laps[0]
-            best_t = laps[0].sectors[si] if si < len(laps[0].sectors) else 0.0
+            best_l = valid_laps[0]
+            best_t = valid_laps[0].sectors[si] if si < len(valid_laps[0].sectors) else 0.0
         best_lap_per_sector.append(best_l)
         best_sector_ms.append(best_t)
 
@@ -320,14 +344,36 @@ def get_laps(session_id: str):
     if not laps:
         return LapListResponse(session_id=session_id, laps=[])
 
-    best_time = min(l.lap_time_ms for l in laps)
+    valid_laps = [l for l in laps if l.valid and l.lap_time_ms > 0]
+    best_time = min((l.lap_time_ms for l in valid_laps), default=0) if valid_laps else min(l.lap_time_ms for l in laps)
 
-    # Theoretical best: fastest each sector
-    n_sectors = max((len(l.sectors) for l in laps), default=0)
-    best_sectors = [float("inf")] * n_sectors
-    for l in laps:
+    # Theoretical best: fastest each sector (valid laps only)
+    # With sector-level validation: reject sectors < 70% of median for that position
+    source_laps = valid_laps if valid_laps else laps
+    n_sectors = max((len(l.sectors) for l in source_laps), default=0)
+
+    # Compute median per sector for outlier rejection
+    sector_values: list[list[float]] = [[] for _ in range(n_sectors)]
+    for l in source_laps:
         for i, s in enumerate(l.sectors):
-            if s < best_sectors[i]:
+            if s > 0:
+                sector_values[i].append(s)
+    sector_medians = []
+    for sv in sector_values:
+        if sv:
+            sv_sorted = sorted(sv)
+            sector_medians.append(sv_sorted[len(sv_sorted) // 2])
+        else:
+            sector_medians.append(0)
+
+    best_sectors = [float("inf")] * n_sectors
+    for l in source_laps:
+        for i, s in enumerate(l.sectors):
+            median = sector_medians[i]
+            # Skip anomalously fast sectors (< 70% of median)
+            if median > 0 and s < median * 0.7:
+                continue
+            if 0 < s < best_sectors[i]:
                 best_sectors[i] = s
     theoretical_best = sum(best_sectors) if all(s < float("inf") for s in best_sectors) else None
 

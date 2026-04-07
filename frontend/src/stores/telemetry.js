@@ -73,7 +73,9 @@ export const useTelemetryStore = defineStore('telemetry', () => {
 
   const fastestLap = computed(() => {
     if (!laps.value.length) return null
-    return laps.value.reduce((best, l) =>
+    const valid = laps.value.filter(l => l.valid !== false && l.lap_time_ms > 0)
+    const pool = valid.length > 0 ? valid : laps.value
+    return pool.reduce((best, l) =>
       l.lap_time_ms < best.lap_time_ms ? l : best
     )
   })
@@ -230,7 +232,9 @@ export const useTelemetryStore = defineStore('telemetry', () => {
       if (loading.value) setProgress(Math.max(loadingProgress.value, 50), 'Selecting fastest lap…')
 
       if (data.laps.length > 0) {
-        const fastest = data.laps.reduce((b, l) =>
+        const validLaps = data.laps.filter(l => l.valid !== false && l.lap_time_ms > 0)
+        const pool = validLaps.length > 0 ? validLaps : data.laps
+        const fastest = pool.reduce((b, l) =>
           l.lap_time_ms < b.lap_time_ms ? l : b
         )
         log('laps', `fastest = lap ${fastest.lap_number} (${fastest.lap_time_ms}ms)`)

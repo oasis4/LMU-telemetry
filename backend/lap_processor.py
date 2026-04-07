@@ -369,5 +369,19 @@ class LapProcessor:
 
             laps.append(lap_data)
 
+        # --- Mark invalid laps (outlaps, inlaps, race starts) ---------------
+        # A lap is invalid if its time is >130% of the fastest lap or if it's
+        # the first lap (typically an out-lap or formation lap).
+        valid_times = [l.lap_time_ms for l in laps if l.lap_time_ms > 0]
+        if valid_times:
+            fastest = min(valid_times)
+            threshold = fastest * 1.3
+            for l in laps:
+                if l.lap_time_ms <= 0 or l.lap_time_ms > threshold:
+                    l.valid = False
+            # First lap is almost always an out-lap (pit exit, formation)
+            if len(laps) > 1 and laps[0].lap_time_ms > fastest * 1.1:
+                laps[0].valid = False
+
         self._laps = laps
         return laps

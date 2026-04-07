@@ -96,10 +96,6 @@ async function openSession(s) {
   }
 }
 
-function goToCompare() {
-  router.push({ name: 'compare' })
-}
-
 function triggerUpload() {
   fileInput.value?.click()
 }
@@ -199,9 +195,6 @@ async function confirmDelete(s) {
         <button class="btn-upload" @click="triggerUpload">
           <input ref="fileInput" type="file" accept=".duckdb" multiple hidden @change="onFileChange" />
           + Upload
-        </button>
-        <button v-if="store.drivers.length >= 2" class="btn-compare" @click="goToCompare">
-          Compare
         </button>
       </div>
     </div>
@@ -394,22 +387,6 @@ async function confirmDelete(s) {
 }
 .btn-upload:hover {
   opacity: 0.85;
-}
-.btn-compare {
-  background: transparent;
-  border: 1px solid var(--accent-blue);
-  color: var(--accent-blue);
-  padding: 8px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.15s;
-  white-space: nowrap;
-}
-.btn-compare:hover {
-  background: var(--accent-blue);
-  color: #fff;
 }
 
 /* ---- Session grid ---- */
