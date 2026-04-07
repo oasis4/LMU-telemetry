@@ -141,7 +141,7 @@ const coaching = computed(() => {
       const cornerDelta = deltaData.delta[dei] - deltaData.delta[dsi]
       tips.unshift({
         icon: cornerDelta > 0.005 ? '🔴' : cornerDelta < -0.005 ? '🟢' : '⚪',
-        label: `Delta: ${cornerDelta > 0 ? '+' : ''}${(cornerDelta * 1000).toFixed(0)}ms`,
+        label: `Delta: ${cornerDelta > 0 ? '+' : ''}${cornerDelta.toFixed(3)}s`,
         detail: cornerDelta > 0.005 ? 'Zeit verloren' : cornerDelta < -0.005 ? 'Zeit gewonnen' : 'Neutral',
       })
     }
@@ -171,7 +171,7 @@ const coaching = computed(() => {
       <!-- Left: map + coaching tips -->
       <div class="cd-left">
         <div class="cd-map">
-          <TrackMap :distance-range="distanceRange" @corner-click="goToCorner" />
+          <TrackMap :distance-range="distanceRange" :show-ref="true" @corner-click="goToCorner" />
         </div>
         <div class="cd-coaching" v-if="coaching">
           <h3 class="cd-section-title">Analyse</h3>
@@ -313,7 +313,7 @@ const coaching = computed(() => {
   background: var(--bg-secondary);
 }
 .cd-map {
-  height: 200px;
+  height: 260px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }

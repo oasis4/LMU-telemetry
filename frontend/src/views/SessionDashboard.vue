@@ -125,22 +125,12 @@ function closeCorner() {
 // Collapsible panel state
 const panelOpen = ref({ stats: true, segments: true, ref: true, laps: true })
 
-// Auto-select ref when active changes (only if none chosen yet)
-watch(() => store.activeLap, (lap) => {
-  if (lap && store.laps.length > 1 && !store.refLap) {
-    const fastest = store.fastestLap
-    if (fastest && fastest.lap_number !== lap.lap_number) {
-      refValue.value = `lap:${fastest.lap_number}`
-      store.selectRefLap(fastest.lap_number)
-    } else {
-      const r = store.laps.find(l => l.lap_number !== lap.lap_number)
-      if (r) {
-        refValue.value = `lap:${r.lap_number}`
-        store.selectRefLap(r.lap_number)
-      }
-    }
+// Sync refValue dropdown when store.refLap changes (e.g. auto-selected in store)
+watch(() => store.refLap, (lap) => {
+  if (lap && !refValue.value) {
+    refValue.value = `lap:${lap.lap_number}`
   }
-})
+}, { immediate: true })
 
 // Fetch driver bests when session loads
 watch(() => store.currentSession?.track, (track) => {
@@ -211,8 +201,8 @@ const clientCoaching = computed(() => {
   if (worstSegment && worstSegment.delta_s > 0.01) {
     focus_zone = { distance_start: worstSegment.distance_start, distance_end: worstSegment.distance_end, delta_s: worstSegment.delta_s, corner_name: worstSegment.corner_name }
     main_message = worstSegment.error_label
-      ? `Größter Verlust: ${worstSegment.corner_name} (${(worstSegment.delta_s * 1000).toFixed(0)}ms) — ${worstSegment.error_label}`
-      : `Größter Verlust: ${worstSegment.corner_name} (${(worstSegment.delta_s * 1000).toFixed(0)}ms)`
+      ? `Größter Verlust: ${worstSegment.corner_name} (${worstSegment.delta_s > 0 ? '+' : ''}${worstSegment.delta_s.toFixed(3)}s) — ${worstSegment.error_label}`
+      : `Größter Verlust: ${worstSegment.corner_name} (${worstSegment.delta_s > 0 ? '+' : ''}${worstSegment.delta_s.toFixed(3)}s)`
   }
   return { segments: segs, focus_zone, main_message }
 })

@@ -229,16 +229,22 @@ export const useTelemetryStore = defineStore('telemetry', () => {
       compositeAvailable.value = data.composite_available || false
       log('laps', `got ${data.laps.length} laps`)
 
-      if (loading.value) setProgress(Math.max(loadingProgress.value, 50), 'Selecting fastest lap…')
+      if (loading.value) setProgress(Math.max(loadingProgress.value, 50), 'Selecting lap…')
 
       if (data.laps.length > 0) {
         const validLaps = data.laps.filter(l => l.valid !== false && l.lap_time_ms > 0)
         const pool = validLaps.length > 0 ? validLaps : data.laps
-        const fastest = pool.reduce((b, l) =>
-          l.lap_time_ms < b.lap_time_ms ? l : b
-        )
-        log('laps', `fastest = lap ${fastest.lap_number} (${fastest.lap_time_ms}ms)`)
-        await _selectActiveLapInternal(fastest.lap_number)
+        // Pick the last valid lap as active (most recent to analyze)
+        const lastValid = pool[pool.length - 1]
+        log('laps', `selecting last valid lap ${lastValid.lap_number} (${lastValid.lap_time_ms}ms)`)
+        await _selectActiveLapInternal(lastValid.lap_number)
+
+        // Auto-select fastest valid lap as reference baseline
+        if (!refLap.value && pool.length > 1) {
+          const fastest = pool.reduce((b, l) => l.lap_time_ms < b.lap_time_ms ? l : b)
+          log('laps', `auto-ref = lap ${fastest.lap_number} (${fastest.lap_time_ms}ms)`)
+          await selectRefLap(fastest.lap_number)
+        }
       }
     } catch (e) {
       log('laps', 'ERROR', e.message)

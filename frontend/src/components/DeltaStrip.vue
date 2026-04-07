@@ -70,7 +70,8 @@ const barSegments = computed(() => {
   const { dist, delta } = getDistAndDelta()
   if (!dist.length) return []
   const dMin = dist[0], dMax = dist[dist.length - 1], dRange = dMax - dMin || 1
-  const maxDelta = Math.max(0.001, ...delta.map(Math.abs))
+  // Fixed scale: ±5 seconds — bars reach full height at 5s delta
+  const maxDelta = 5.0
   const w = containerWidth.value
   const halfH = barHeight / 2
   const segments = []
@@ -80,7 +81,7 @@ const barSegments = computed(() => {
     const x = ((dist[i] - dMin) / dRange) * w
     const xNext = ((dist[Math.min(i + step, dist.length - 1)] - dMin) / dRange) * w
     const val = delta[i]
-    const h = (Math.abs(val) / maxDelta) * halfH * 0.85
+    const h = Math.min(1, Math.abs(val) / maxDelta) * halfH * 0.85
 
     segments.push({
       x,

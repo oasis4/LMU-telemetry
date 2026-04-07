@@ -100,8 +100,10 @@ function createChart() {
     const cfg = CHANNEL_CONFIG[ch] || {}
     const shortLabel = cfg.label ? cfg.label.split(' (')[0] : ch
 
+    const activeLapNum = store.activeLap?.lap_number
+    const refLapNum = store.refLap?.lap_number
     seriesConfig.push({
-      label: isMulti ? shortLabel : 'Your Lap',
+      label: isMulti ? shortLabel : `Runde ${activeLapNum ?? '?'} (Deine)`,
       stroke: colors.active,
       width: 1.5,
       fill: cfg.fill && colors.fill ? colors.fill : undefined,
@@ -109,7 +111,7 @@ function createChart() {
     })
     if (hasRef) {
       seriesConfig.push({
-        label: isMulti ? `${shortLabel} Ref` : 'Ref Lap',
+        label: isMulti ? `${shortLabel} Ref` : `Runde ${refLapNum ?? '?'} (Referenz)`,
         stroke: colors.ref,
         width: 1,
         dash: [4, 2],

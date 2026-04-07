@@ -27,9 +27,9 @@ def _detect_corners_steering(
     speed: np.ndarray,
     distance: np.ndarray,
     steering: np.ndarray,
-    steer_threshold: float = 0.05,
-    gap_m: float = 80.0,
-    min_duration_m: float = 20.0,
+    steer_threshold: float = 0.03,
+    gap_m: float = 50.0,
+    min_duration_m: float = 12.0,
     max_apex_speed: float = 280.0,
 ) -> list[Corner]:
     """Detect corners from steering activity.
@@ -109,7 +109,7 @@ def _detect_corners_speed(
     window_m: float = 200.0,
     threshold_pct: float = 0.92,
     max_apex_speed: float = 280.0,
-    min_duration_m: float = 20.0,
+    min_duration_m: float = 12.0,
 ) -> list[Corner]:
     """Detect corners from speed dips (fallback when steering unavailable).
 
