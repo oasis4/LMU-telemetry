@@ -45,6 +45,7 @@ class LapData:
     lap_time_ms: float = 0.0
     valid: bool = True
     sectors: list[float] = field(default_factory=list)  # ms per sector
+    sectors_matched: bool = False  # True if sectors came from real events
 
     # distance-sampled arrays
     distance: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -343,6 +344,7 @@ class LapProcessor:
                 lap_time_ms=lap_time_ms,
                 valid=True,
                 sectors=sectors_ms,
+                sectors_matched=matched_sectors,
                 distance=d_new,
                 speed=_resample(lap_speed),
                 throttle=_resample(throttle[sl]),
@@ -369,19 +371,61 @@ class LapProcessor:
 
             laps.append(lap_data)
 
-        # --- Mark invalid laps (outlaps, inlaps, race starts) ---------------
-        # A lap is invalid if its time is >130% of the fastest lap or if it's
-        # the first lap (typically an out-lap or formation lap).
+        # --- Mark invalid laps -----------------------------------------------
+        # Step 1: basic time-based filtering
         valid_times = [l.lap_time_ms for l in laps if l.lap_time_ms > 0]
-        if valid_times:
-            fastest = min(valid_times)
-            threshold = fastest * 1.3
-            for l in laps:
-                if l.lap_time_ms <= 0 or l.lap_time_ms > threshold:
-                    l.valid = False
-            # First lap is almost always an out-lap (pit exit, formation)
-            if len(laps) > 1 and laps[0].lap_time_ms > fastest * 1.1:
-                laps[0].valid = False
+        if not valid_times:
+            self._laps = laps
+            return laps
+
+        # Use median as reference instead of fastest (avoids race-start laps
+        # skewing the threshold — a fast formation lap shouldn't be the anchor)
+        sorted_times = sorted(valid_times)
+        median_time = sorted_times[len(sorted_times) // 2]
+        threshold = median_time * 1.2  # 20% slower than median = invalid
+        too_fast = median_time * 0.85  # 15% faster than median = suspicious
+
+        for l in laps:
+            if l.lap_time_ms <= 0 or l.lap_time_ms > threshold:
+                l.valid = False
+
+        # Step 2: first lap is usually out-lap/formation/race-start
+        if len(laps) > 1:
+            laps[0].valid = False
+
+        # Step 3: detect laps with broken sector patterns.
+        # If a lap has sectors where any sector proportion is wildly different
+        # from the majority, mark it invalid.
+        laps_with_sectors = [l for l in laps if l.valid and len(l.sectors) >= 2
+                             and all(s > 0 for s in l.sectors)]
+        if len(laps_with_sectors) >= 3:
+            # Compute sector proportions (sector_i / lap_time) per lap
+            proportions = []
+            for l in laps_with_sectors:
+                total = sum(l.sectors)
+                if total > 0:
+                    proportions.append([s / total for s in l.sectors])
+                else:
+                    proportions.append([1.0 / len(l.sectors)] * len(l.sectors))
+            # Median proportions
+            n_sec = len(proportions[0])
+            med_props = []
+            for si in range(n_sec):
+                vals = sorted(p[si] for p in proportions)
+                med_props.append(vals[len(vals) // 2])
+            # Flag laps where any sector proportion deviates >50% from median
+            for l, props in zip(laps_with_sectors, proportions):
+                for si in range(n_sec):
+                    if med_props[si] > 0.05:  # ignore tiny sectors
+                        ratio = props[si] / med_props[si]
+                        if ratio < 0.5 or ratio > 2.0:
+                            l.valid = False
+                            break
+
+        # Step 4: laps too fast compared to median are suspect
+        for l in laps:
+            if l.valid and l.lap_time_ms < too_fast:
+                l.valid = False
 
         self._laps = laps
         return laps

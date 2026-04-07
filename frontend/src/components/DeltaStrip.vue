@@ -45,13 +45,14 @@ const cornerMarkers = computed(() => {
     const pos = ((c.distance_apex - dMin) / dRange) * w
     if (pos < 0 || pos > w) return null
 
-    // Get delta at this corner apex
+    // Per-corner delta: difference between corner exit and entry
     const dd = store.delta
     let deltaAtCorner = 0
     if (dd?.distance?.length) {
-      const idx = dd.distance.findIndex(d => d >= c.distance_apex)
-      if (idx >= 0 && idx < dd.delta.length) {
-        deltaAtCorner = dd.delta[idx]
+      const si = dd.distance.findIndex(d => d >= c.distance_start)
+      const ei = dd.distance.findIndex(d => d >= c.distance_end)
+      if (si >= 0 && ei >= 0 && ei < dd.delta.length) {
+        deltaAtCorner = dd.delta[ei] - dd.delta[si]
       }
     }
 
@@ -118,8 +119,8 @@ const popupData = computed(() => {
     entrySpeed: tel.speed?.[startIdx]?.toFixed(0) || '—',
     apexSpeed: tel.speed?.[apexIdx]?.toFixed(0) || '—',
     exitSpeed: tel.speed?.[endIdx]?.toFixed(0) || '—',
-    throttle: ((tel.throttle?.[apexIdx] || 0) * 100).toFixed(0),
-    brake: ((tel.brake?.[apexIdx] || 0) * 100).toFixed(0),
+    throttle: (tel.throttle?.[apexIdx] || 0).toFixed(0),
+    brake: (tel.brake?.[apexIdx] || 0).toFixed(0),
     gear: tel.gear?.[apexIdx] || '—',
   }
 
@@ -132,8 +133,8 @@ const popupData = computed(() => {
       entrySpeed: ref.speed?.[rStart]?.toFixed(0) || '—',
       apexSpeed: ref.speed?.[rApex]?.toFixed(0) || '—',
       exitSpeed: ref.speed?.[rEnd]?.toFixed(0) || '—',
-      throttle: ((ref.throttle?.[rApex] || 0) * 100).toFixed(0),
-      brake: ((ref.brake?.[rApex] || 0) * 100).toFixed(0),
+      throttle: (ref.throttle?.[rApex] || 0).toFixed(0),
+      brake: (ref.brake?.[rApex] || 0).toFixed(0),
       gear: ref.gear?.[rApex] || '—',
     }
   }

@@ -14,21 +14,19 @@ const containerRef = ref(null)
 const width = ref(800)
 const height = ref(300)
 
-// Build shared bounds from ALL traces so active + ref align perfectly.
+// Build projection from the active lap only.
 // Returns { project(lon, lat) → {x, y} } with aspect-ratio-preserved coords.
 function buildProjection(w, h, padding = 20) {
-  const sources = [store.activeTelemetry, store.refTelemetry].filter(t => t?.lat?.length)
-  if (!sources.length) return null
+  const t = store.activeTelemetry
+  if (!t?.lat?.length) return null
 
   let latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity
-  for (const t of sources) {
-    for (let i = 0; i < t.lat.length; i++) {
-      const la = t.lat[i], lo = t.lon[i]
-      if (la < latMin) latMin = la
-      if (la > latMax) latMax = la
-      if (lo < lonMin) lonMin = lo
-      if (lo > lonMax) lonMax = lo
-    }
+  for (let i = 0; i < t.lat.length; i++) {
+    const la = t.lat[i], lo = t.lon[i]
+    if (la < latMin) latMin = la
+    if (la > latMax) latMax = la
+    if (lo < lonMin) lonMin = lo
+    if (lo > lonMax) lonMax = lo
   }
 
   // cos(lat) correction: at this latitude, longitude degrees are shorter
@@ -70,7 +68,6 @@ function buildPath(telemetry, proj) {
 const projection = computed(() => buildProjection(width.value, height.value))
 
 const activePath = computed(() => buildPath(store.activeTelemetry, projection.value))
-const refPath = computed(() => buildPath(store.refTelemetry, projection.value))
 
 // Corner markers with per-corner delta values (time gained/lost IN this corner)
 const cornerMarkers = computed(() => {
@@ -92,8 +89,8 @@ const cornerMarkers = computed(() => {
       : cornerDelta > 0.005 ? '#ef4444'
       : cornerDelta < -0.005 ? '#22c55e' : '#888'
     const deltaLabel = cornerDelta == null ? ''
-      : cornerDelta > 0 ? `+${(cornerDelta * 1000).toFixed(0)}ms`
-      : `${(cornerDelta * 1000).toFixed(0)}ms`
+      : cornerDelta > 0 ? `+${cornerDelta.toFixed(3)}`
+      : cornerDelta.toFixed(3)
     return { ...c, x, y, deltaAtApex: cornerDelta, deltaColor, deltaLabel }
   }).filter(Boolean)
 })
@@ -175,17 +172,7 @@ function onCornerClick(c) {
         stroke-linecap="round"
       />
 
-      <!-- Reference lap path -->
-      <path
-        v-if="refPath"
-        :d="refPath"
-        fill="none"
-        stroke="#f97316"
-        stroke-width="2.5"
-        opacity="0.7"
-      />
-
-      <!-- Active lap path (drawn on top if no delta) -->
+      <!-- Active lap path (if no delta data yet) -->
       <path
         v-if="activePath && !deltaSegments.length"
         :d="activePath"

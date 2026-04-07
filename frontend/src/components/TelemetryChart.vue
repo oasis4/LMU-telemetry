@@ -17,8 +17,8 @@ let resizeObserver = null
 
 const CHANNEL_CONFIG = {
   speed: { label: 'Speed (km/h)', unit: 'km/h', fill: false },
-  throttle: { label: 'Throttle (%)', unit: '%', fill: true, scale: 100 },
-  brake: { label: 'Brake (%)', unit: '%', fill: true, scale: 100 },
+  throttle: { label: 'Throttle (%)', unit: '%', fill: true },
+  brake: { label: 'Brake (%)', unit: '%', fill: true },
   steering: { label: 'Steering', unit: '', fill: false, yRange: [-1, 1] },
   gear: { label: 'Gear', unit: '', fill: false, stepped: true },
   rpm: { label: 'RPM', unit: 'rpm', fill: false },
