@@ -41,6 +41,10 @@ function goToAnalysis() {
   router.push({ name: 'analysis', params: { sessionId: props.sessionId } })
 }
 
+function goToReport() {
+  router.push({ name: 'report', params: { sessionId: props.sessionId } })
+}
+
 // Auto-select ref lap as second fastest
 const refLapOptions = computed(() =>
   store.laps.filter(l => !store.activeLap || l.lap_number !== store.activeLap.lap_number)
@@ -84,8 +88,11 @@ watch(() => store.activeLap, (newLap) => {
             </option>
           </select>
         </label>
+        <button class="btn btn-primary" @click="goToReport">
+          Session Report →
+        </button>
         <button class="btn" :class="{ 'btn-active': store.activeLap }" @click="goToAnalysis">
-          Open Analysis →
+          Detail-Analyse →
         </button>
       </div>
     </div>
