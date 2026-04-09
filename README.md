@@ -1,149 +1,145 @@
-[![License](https://img.shields.io/badge/license-NonCommercial-orange)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-[![Release](https://img.shields.io/github/v/release/alelosbrigia/LMU-telemetry)](https://github.com/alelosbrigia/LMU-telemetry/releases)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+<p align="center">
+  <img src="https://img.shields.io/badge/license-NonCommercial-orange?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
+  <a href="https://github.com/alelosbrigia/LMU-telemetry/releases"><img src="https://img.shields.io/github/v/release/alelosbrigia/LMU-telemetry?style=flat-square&color=c8ff00" alt="Release" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Platform" />
+</p>
 
+<h1 align="center">🏎️ LMU Telemetry → MoTeC Converter</h1>
 
-# 🏎️ LMU Telemetry → MoTeC Converter
+<p align="center">
+  <strong>Convert Le Mans Ultimate telemetry to MoTeC i2 &mdash; one click, zero hassle.</strong>
+</p>
 
-[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/alessandromanfredi)
+<p align="center">
+  <a href="https://ko-fi.com/alessandromanfredi"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi" /></a>
+</p>
+
 ---
 
 ## ✨ Features
 
-- ✅ Direct import from LMU `.duckdb` telemetry files
-- ✅ **Single unified MoTeC log** output (`*_CUSTOM.ld`)
-- ✅ Logical channel groups selectable from GUI:
-  - Driver / Inputs
-  - Powertrain
-  - Vehicle Dynamics
-  - Aero & Suspension
-  - Tyres
-  - Track & Environment
-  - States & Flags
-- ✅ Configurable sampling frequency per group
-- ✅ Correct master timeline (no broken graphs)
-- ✅ Professional channel naming:
-  - Wheels: **FL / FR / RL / RR**
-  - Sides: **_L / _R**
-  - Tyre layers: **_I / _M / _O**
-- ✅ Consistent units:
-  - Temperatures: **°C**
-  - Pressures: **bar**
-  - Heights / suspension: **mm**
-  - Speed: **km/h**
-  - Engine speed: **rpm**
-- ✅ Simple **one-click GUI**
+| Category | Details |
+|---|---|
+| **Import** | Direct import from LMU `.duckdb` telemetry files |
+| **Output** | Single unified MoTeC log (`*_CUSTOM.ld`) + CSV export |
+| **Channel Groups** | Driver / Inputs · Powertrain · Vehicle Dynamics · Aero & Suspension · Tyres · Track & Environment · States & Flags |
+| **Sampling** | Configurable frequency per group |
+| **Timeline** | Correct master timeline — no broken graphs |
+| **Naming** | Wheels: `FL / FR / RL / RR` · Sides: `_L / _R` · Tyre layers: `_I / _M / _O` |
+| **Units** | °C · bar · mm · km/h · rpm — consistent across all channels |
+| **GUI** | Simple one-click interface |
 
 ---
 
 ## 🖥️ Requirements
 
 - **Windows**
-- **Python 3.10+** (with Tkinter, included in the official installer)
+- **Python 3.10+** (with Tkinter — included in the official installer)
 
 ### Quick install (recommended)
 
-1. Install Python 3.10 or newer and make sure it's available in your PATH.
-2. Double-click `install_dependencies.bat` to create a virtual environment and install all required packages.
-3. Launch the GUI with `Start.bat` (it will automatically use the virtual environment when present).
+```
+1.  Install Python 3.10+ and make sure it's in your PATH
+2.  Double-click  install_dependencies.bat   → creates venv & installs packages
+3.  Launch the GUI with  Start.bat
+```
 
 ### Manual install
-
-Install the dependencies directly if you prefer not to use the helper script:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Tkinter is included with the official Windows Python distribution.
+> Tkinter ships with the official Windows Python distribution — no extra install needed.
 
-🚀 Quick Start
-Clone or download this repository
+---
 
-Make sure Python is available in your PATH
+## 🚀 Quick Start
 
-Launch the GUI with:
+1. Clone or download this repository
+2. Make sure Python is available in your `PATH`
+3. Launch the GUI:
+   ```
+   Start.bat
+   ```
+4. Select an LMU `.duckdb` telemetry file
+5. Choose channel groups and sampling frequencies
+6. Click **RUN**
 
-Copia codice
-oneclick.bat
-Select an LMU .duckdb telemetry file
+### 📂 Output
 
-Choose channel groups and sampling frequencies
-
-Click RUN
-
-📂 Output files will be created in:
-
-php-template
-Copia codice
+```
 Telemetry/
-  <SessionName>_CUSTOM.ld
-  <SessionName>_CUSTOM.csv
-  <SessionName>_CUSTOM.meta.csv
-Open the .ld file directly in MoTeC i2.
+  ├── <SessionName>_CUSTOM.ld        ← open in MoTeC i2
+  ├── <SessionName>_CUSTOM.csv
+  └── <SessionName>_CUSTOM.meta.csv
+```
 
-📊 MoTeC Output
-Single, coherent telemetry log
+---
 
-Channels already renamed and grouped
+## 📊 MoTeC Output
 
-Beacon and LapTime generated automatically
+- Single, coherent telemetry log
+- Channels already renamed and grouped
+- Beacon and LapTime generated automatically
+- Ready for overlays, histograms, and math channels
 
-Ready for overlays, histograms and math channels
+---
 
-⚠️ Disclaimer
-This project is not affiliated with:
+## ⚠️ Disclaimer
 
-Studio 397
+This project is **not affiliated** with Studio 397, Motorsport Games, or MoTeC Pty Ltd.  
+It is a community-driven, unofficial tool.
 
-Motorsport Games
+---
 
-MoTeC Pty Ltd
+## 📄 License
 
-This is a community-driven, unofficial tool.
+Released under a **Non-Commercial License**.
 
-📄 License
-This project is released under a Non-Commercial License.
+| | |
+|---|---|
+| ✅ Personal use | ✅ Educational use |
+| ✅ Community / sim-racing use | |
+| ❌ Commercial use | ❌ SaaS / resale / commercial integration |
 
-✔ Personal use
-✔ Educational use
-✔ Community / sim-racing use
+See [`LICENSE`](LICENSE) for full details.
 
-❌ Commercial use is NOT permitted
-❌ Selling, SaaS usage, or integration into commercial products is prohibited without explicit permission from the author
+---
 
-See the LICENSE file for full details.
+## 🤝 Contributing
 
-🤝 Contributing
-Pull Requests and improvements are welcome, as long as they remain consistent with the non-commercial nature of the project.
+Pull Requests and improvements are welcome — as long as they stay consistent with the non-commercial nature of the project.
 
-If you wish to use this tool in a commercial context, please contact the author.
+Want to use this commercially? Contact the author first.
 
-🏁 Roadmap (Ideas)
-GUI profile presets (Qualifying / Race / Endurance)
+---
 
-Save/load GUI profiles (JSON)
+## 🏁 Roadmap
 
-Improved unit detection from metadata
+- [ ] GUI profile presets (Qualifying / Race / Endurance)
+- [ ] Save/load GUI profiles (JSON)
+- [ ] Improved unit detection from metadata
+- [ ] Standalone `.exe` build
+- [ ] Support for other DuckDB-based simulators
 
-Standalone .exe build
+---
 
-Support for other DuckDB-based simulators
+## ❤️ Credits
 
-❤️ Credits
-LMU sim racing community
-MoTeC for the analysis software
-Everyone who tests and provides feedback
-chatgpt for the help 
+- The **LMU sim racing community**
+- **MoTeC** for the analysis software
+- Everyone who tests and provides feedback
+- **ChatGPT** for the assist
 
+---
 
-## 💙 Support the Project
-
-This is a community-driven, non-commercial project.
-
-If you find it useful and want to support its development, you can buy me a coffee ☕  
-on Ko-fi: 
-👉 https://ko-fi.com/alessandromanfredi
+<p align="center">
+  <strong>💙 Support the Project</strong><br/>
+  This is a community-driven, non-commercial project.<br/>
+  If you find it useful, you can buy me a coffee ☕<br/><br/>
+  <a href="https://ko-fi.com/alessandromanfredi"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi" /></a>
+</p>
 
 

@@ -92,8 +92,8 @@ const tip = computed(() => {
 
   if (tips.length === 0) {
     return deltaAtApex > 0
-      ? `Losing ${(deltaAtApex * 1000).toFixed(0)}ms through ${corner.name}. Review entry speed and line.`
-      : `Gaining ${Math.abs(deltaAtApex * 1000).toFixed(0)}ms through ${corner.name}. Good work!`
+      ? `Losing ${deltaAtApex.toFixed(3)}s through ${corner.name}. Review entry speed and line.`
+      : `Gaining ${Math.abs(deltaAtApex).toFixed(3)}s through ${corner.name}. Good work!`
   }
 
   return tips.join(' ')

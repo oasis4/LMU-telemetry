@@ -7,7 +7,10 @@ corner detection, time-delta computation, and multi-driver corner comparison.
 from __future__ import annotations
 
 import os
+import re
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -17,20 +20,23 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .corner_detector import detect_corners
 from .delta_calc import compute_delta
-from .duckdb_reader import DuckDBSession
+from .duckdb_reader import DuckDBSession, quick_file_scan
 from .lap_processor import LapProcessor, LapData
 from .models import (
     ChannelsResponse,
+    CoachingAnalysis,
     CompareResponse,
     Corner as CornerModel,
     CornerComparison,
     CornersResponse,
     DeltaResponse,
     DriverCornerMetrics,
+    FocusZone,
     LapListResponse,
     LapSummary,
     LoadedSessionInfo,
     SectorTimes,
+    SegmentAnalysis,
     SessionInfo,
     TelemetryData,
 )
@@ -56,11 +62,156 @@ Path(TELEMETRY_DIR).mkdir(parents=True, exist_ok=True)
 # In-memory session store:  session_id → (DuckDBSession, LapProcessor, driver_name)
 _sessions: dict[str, tuple[DuckDBSession, LapProcessor, str]] = {}
 
+# ---------------------------------------------------------------------------
+# Session list cache (background-scanned)
+# ---------------------------------------------------------------------------
+
+_session_cache: dict[str, dict] = {}  # filename → quick_file_scan result
+_cache_lock = threading.Lock()
+_cache_ready = threading.Event()
+
+
+def _scan_all_sessions() -> None:
+    """Background scan of all .duckdb files for metadata/lap info."""
+    tdir = Path(TELEMETRY_DIR)
+    if not tdir.is_dir():
+        _cache_ready.set()
+        return
+    files = [f for f in sorted(tdir.iterdir())
+             if f.suffix.lower() == ".duckdb" and f.is_file()]
+    # Parallel scan
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = pool.map(lambda f: quick_file_scan(str(f)), files)
+    with _cache_lock:
+        _session_cache.clear()
+        for info in results:
+            _session_cache[info["filename"]] = info
+    _cache_ready.set()
+
+
+def _start_cache_scan() -> None:
+    threading.Thread(target=_scan_all_sessions, daemon=True).start()
+
+
+@app.on_event("startup")
+def _on_startup():
+    _start_cache_scan()
+
 
 def _get_session(session_id: str) -> tuple[DuckDBSession, LapProcessor, str]:
     if session_id not in _sessions:
         raise HTTPException(404, f"Session '{session_id}' not loaded.")
     return _sessions[session_id]
+
+
+def _build_composite(laps: list[LapData]) -> TelemetryData:
+    """Build a theoretical best-lap composite by splicing the fastest sector
+    from each real lap.  Sectors are identified by cumulative time boundaries
+    derived from each lap's ``.sectors`` list and ``.time`` array.
+
+    Only valid laps are used (filters out pit-out, in-laps, formation laps).
+    """
+    # Filter to valid laps only
+    valid_laps = [l for l in laps if l.valid and l.lap_time_ms > 0]
+    if not valid_laps:
+        valid_laps = laps  # fallback if none marked valid
+    if not valid_laps:
+        raise HTTPException(404, "No laps to build composite from.")
+
+    n_sectors = max((len(l.sectors) for l in valid_laps), default=0)
+    if n_sectors == 0:
+        raise HTTPException(400, "No sector data available for composite.")
+
+    # Compute median per sector for outlier rejection
+    _sv: list[list[float]] = [[] for _ in range(n_sectors)]
+    for l in valid_laps:
+        for si in range(min(n_sectors, len(l.sectors))):
+            if l.sectors[si] > 0:
+                _sv[si].append(l.sectors[si])
+    _medians = []
+    for sv in _sv:
+        if sv:
+            sv.sort()
+            _medians.append(sv[len(sv) // 2])
+        else:
+            _medians.append(0)
+
+    # For each sector index, find the lap with the fastest time (skip outliers)
+    best_lap_per_sector: list[LapData] = []
+    best_sector_ms: list[float] = []
+    for si in range(n_sectors):
+        best_l = None
+        best_t = float("inf")
+        median = _medians[si]
+        for l in valid_laps:
+            if si < len(l.sectors) and 0 < l.sectors[si] < best_t:
+                # Skip anomalously fast sectors (< 70% of median)
+                if median > 0 and l.sectors[si] < median * 0.7:
+                    continue
+                best_t = l.sectors[si]
+                best_l = l
+        if best_l is None:
+            best_l = valid_laps[0]
+            best_t = valid_laps[0].sectors[si] if si < len(valid_laps[0].sectors) else 0.0
+        best_lap_per_sector.append(best_l)
+        best_sector_ms.append(best_t)
+
+    # Build composite arrays by splicing distance-sampled data.
+    # Sector boundaries in distance: cumulative sector time mapped via
+    # the source lap's time(distance) array.
+    composite_arrays: dict[str, list[float]] = {
+        k: [] for k in ("distance", "speed", "throttle", "brake",
+                        "steering", "rpm", "lat", "lon", "time")
+    }
+    composite_gear: list[int] = []
+    time_offset = 0.0
+
+    for si in range(n_sectors):
+        lap = best_lap_per_sector[si]
+        # Determine distance boundaries for this sector in the source lap
+        cum_before = sum(lap.sectors[:si]) / 1000.0  # seconds
+        cum_after = sum(lap.sectors[:si + 1]) / 1000.0  # seconds
+        t = lap.time  # time in seconds from lap start
+
+        d_start = float(np.interp(cum_before, t, lap.distance))
+        d_end = float(np.interp(cum_after, t, lap.distance))
+        i_start = max(0, int(np.searchsorted(lap.distance, d_start)))
+        i_end = min(len(lap.distance), int(np.searchsorted(lap.distance, d_end)))
+        if i_end <= i_start:
+            continue
+
+        sl = slice(i_start, i_end)
+        composite_arrays["distance"].extend(lap.distance[sl].tolist())
+        composite_arrays["speed"].extend(lap.speed[sl].tolist())
+        composite_arrays["throttle"].extend(lap.throttle[sl].tolist())
+        composite_arrays["brake"].extend(lap.brake[sl].tolist())
+        composite_arrays["steering"].extend(lap.steering[sl].tolist())
+        composite_arrays["rpm"].extend(lap.rpm[sl].tolist())
+        composite_arrays["lat"].extend(lap.lat[sl].tolist())
+        composite_arrays["lon"].extend(lap.lon[sl].tolist())
+
+        # Shift time so sectors chain seamlessly
+        sector_time = (lap.time[sl] - lap.time[i_start]) + time_offset
+        composite_arrays["time"].extend(sector_time.tolist())
+        time_offset = composite_arrays["time"][-1] if composite_arrays["time"] else 0.0
+
+        composite_gear.extend(lap.gear[sl].astype(int).tolist())
+
+    total_ms = sum(best_sector_ms)
+    return TelemetryData(
+        distance=composite_arrays["distance"],
+        speed=composite_arrays["speed"],
+        throttle=composite_arrays["throttle"],
+        brake=composite_arrays["brake"],
+        steering=composite_arrays["steering"],
+        gear=composite_gear,
+        rpm=composite_arrays["rpm"],
+        lat=composite_arrays["lat"],
+        lon=composite_arrays["lon"],
+        time=composite_arrays["time"],
+        lap_time_ms=total_ms,
+        sectors=best_sector_ms,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -69,19 +220,26 @@ def _get_session(session_id: str) -> tuple[DuckDBSession, LapProcessor, str]:
 
 @app.get("/api/sessions", response_model=list[SessionInfo])
 def list_sessions():
-    """List all .duckdb files found in ``TELEMETRY_DIR``."""
-    tdir = Path(TELEMETRY_DIR)
-    if not tdir.is_dir():
-        return []
-    result: list[SessionInfo] = []
-    for f in sorted(tdir.iterdir()):
-        if f.suffix.lower() == ".duckdb" and f.is_file():
-            result.append(SessionInfo(
-                session_id="",
-                filename=f.name,
-                track=f.stem,
-            ))
-    return result
+    """List all .duckdb files with metadata from background cache."""
+    _cache_ready.wait(timeout=15)  # wait for initial scan
+    with _cache_lock:
+        items = list(_session_cache.values())
+    return [
+        SessionInfo(
+            session_id="",
+            filename=i["filename"],
+            track=i.get("track", ""),
+            layout=i.get("layout", ""),
+            car=i.get("car", ""),
+            car_class=i.get("car_class", ""),
+            session_type=i.get("session_type", ""),
+            driver=i.get("driver", ""),
+            date=i.get("date", ""),
+            lap_count=i.get("lap_count", 0),
+            best_time=i.get("best_time", 0.0),
+        )
+        for i in items
+    ]
 
 
 @app.post("/api/upload", response_model=SessionInfo)
@@ -115,15 +273,23 @@ async def upload_session(file: UploadFile = File(...), driver: str = ""):
     meta = sess.session_metadata()
     driver_name = driver.strip() or meta.get("driver", "") or "Unknown"
     _sessions[sid] = (sess, proc, driver_name)
+    best = min((l.lap_time_ms for l in laps if l.lap_time_ms > 0), default=0.0)
+
+    # Refresh cache so new file appears in session list
+    _start_cache_scan()
 
     return SessionInfo(
         session_id=sid,
         filename=safe_name,
         track=meta.get("track", ""),
+        layout=meta.get("layout", ""),
         car=meta.get("car", ""),
+        car_class=meta.get("car_class", ""),
+        session_type=meta.get("session_type", ""),
         driver=driver_name,
         date=meta.get("date", ""),
         lap_count=len(laps),
+        best_time=round(best / 1000.0, 3) if best > 0 else 0.0,
     )
 
 
@@ -156,15 +322,20 @@ def load_session(filename: str, driver: str = ""):
     meta = sess.session_metadata()
     driver_name = driver.strip() or meta.get("driver", "") or "Unknown"
     _sessions[sid] = (sess, proc, driver_name)
+    best = min((l.lap_time_ms for l in laps if l.lap_time_ms > 0), default=0.0)
 
     return SessionInfo(
         session_id=sid,
         filename=filename,
         track=meta.get("track", ""),
+        layout=meta.get("layout", ""),
         car=meta.get("car", ""),
+        car_class=meta.get("car_class", ""),
+        session_type=meta.get("session_type", ""),
         driver=driver_name,
         date=meta.get("date", ""),
         lap_count=len(laps),
+        best_time=round(best / 1000.0, 3) if best > 0 else 0.0,
     )
 
 
@@ -176,14 +347,36 @@ def get_laps(session_id: str):
     if not laps:
         return LapListResponse(session_id=session_id, laps=[])
 
-    best_time = min(l.lap_time_ms for l in laps)
+    valid_laps = [l for l in laps if l.valid and l.lap_time_ms > 0]
+    best_time = min((l.lap_time_ms for l in valid_laps), default=0) if valid_laps else min(l.lap_time_ms for l in laps)
 
-    # Theoretical best: fastest each sector
-    n_sectors = max((len(l.sectors) for l in laps), default=0)
-    best_sectors = [float("inf")] * n_sectors
-    for l in laps:
+    # Theoretical best: fastest each sector (valid laps only)
+    # With sector-level validation: reject sectors < 70% of median for that position
+    source_laps = valid_laps if valid_laps else laps
+    n_sectors = max((len(l.sectors) for l in source_laps), default=0)
+
+    # Compute median per sector for outlier rejection
+    sector_values: list[list[float]] = [[] for _ in range(n_sectors)]
+    for l in source_laps:
         for i, s in enumerate(l.sectors):
-            if s < best_sectors[i]:
+            if s > 0:
+                sector_values[i].append(s)
+    sector_medians = []
+    for sv in sector_values:
+        if sv:
+            sv_sorted = sorted(sv)
+            sector_medians.append(sv_sorted[len(sv_sorted) // 2])
+        else:
+            sector_medians.append(0)
+
+    best_sectors = [float("inf")] * n_sectors
+    for l in source_laps:
+        for i, s in enumerate(l.sectors):
+            median = sector_medians[i]
+            # Skip anomalously fast sectors (< 70% of median)
+            if median > 0 and s < median * 0.7:
+                continue
+            if 0 < s < best_sectors[i]:
                 best_sectors[i] = s
     theoretical_best = sum(best_sectors) if all(s < float("inf") for s in best_sectors) else None
 
@@ -217,14 +410,23 @@ def get_laps(session_id: str):
         laps=summaries,
         theoretical_best_ms=theoretical_best,
         theoretical_sectors=theo_sec,
+        composite_available=theoretical_best is not None and len(laps) > 1,
     )
 
 
 @app.get("/api/telemetry/{session_id}/{lap_number}", response_model=TelemetryData)
 def get_telemetry(session_id: str, lap_number: int):
-    """Return full telemetry for a lap, sampled at 1 m resolution."""
+    """Return full telemetry for a lap, sampled at 1 m resolution.
+
+    Use ``lap_number=0`` to get the theoretical best-lap composite
+    (spliced from the best sector of each real lap).
+    """
     _, proc, _ = _get_session(session_id)
     laps = proc.process()
+
+    if lap_number == 0:
+        return _build_composite(laps)
+
     lap = next((l for l in laps if l.lap_number == lap_number), None)
     if lap is None:
         raise HTTPException(404, f"Lap {lap_number} not found.")
@@ -238,6 +440,7 @@ def get_telemetry(session_id: str, lap_number: int):
         rpm=lap.rpm.tolist(),
         lat=lap.lat.tolist(),
         lon=lap.lon.tolist(),
+        time=lap.time.tolist() if len(lap.time) > 0 else [],
         lap_time_ms=lap.lap_time_ms,
         sectors=lap.sectors,
     )
@@ -252,7 +455,7 @@ def get_corners(session_id: str, lap_number: int = 1):
     if lap is None:
         raise HTTPException(404, f"Lap {lap_number} not found.")
 
-    raw_corners = detect_corners(lap.speed, lap.distance)
+    raw_corners = detect_corners(lap.speed, lap.distance, steering=lap.steering)
     corners = [
         CornerModel(
             id=c.id,
@@ -289,6 +492,213 @@ def get_channels(session_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Coaching analysis endpoint
+# ---------------------------------------------------------------------------
+
+def _classify_corner_error(
+    active_lap: LapData, ref_lap: LapData, corner, delta_arr, delta_dist,
+) -> tuple[str | None, str, str, str]:
+    """Classify the error type for one corner. Returns (error_type, label, explanation, recommendation)."""
+    d = active_lap.distance
+    spd_a = active_lap.speed
+    brk_a = active_lap.brake
+    thr_a = active_lap.throttle
+
+    spd_r = ref_lap.speed
+    brk_r = ref_lap.brake
+    thr_r = ref_lap.throttle
+
+    si_a = int(np.searchsorted(d, corner.distance_start))
+    ai_a = int(np.searchsorted(d, corner.distance_apex))
+    ei_a = int(np.searchsorted(d, corner.distance_end))
+    si_a = max(si_a, 0)
+    ai_a = min(ai_a, len(d) - 1)
+    ei_a = min(ei_a, len(d) - 1)
+
+    d_r = ref_lap.distance
+    si_r = int(np.searchsorted(d_r, corner.distance_start))
+    ai_r = int(np.searchsorted(d_r, corner.distance_apex))
+    ei_r = int(np.searchsorted(d_r, corner.distance_end))
+    si_r = max(si_r, 0)
+    ai_r = min(ai_r, len(d_r) - 1)
+    ei_r = min(ei_r, len(d_r) - 1)
+
+    # Find brake points
+    def _find_brake(brk, dist, start_i, apex_i):
+        search_start = max(0, start_i - 50)
+        for i in range(search_start, apex_i):
+            if i < len(brk) and brk[i] > 0.1:
+                return float(dist[i])
+        return None
+
+    # Find throttle points (first > 50% after apex)
+    def _find_throttle(thr, dist, apex_i, end_i):
+        for i in range(apex_i, min(end_i + 50, len(thr))):
+            if thr[i] > 0.5:
+                return float(dist[i])
+        return None
+
+    a_brake = _find_brake(brk_a, d, si_a, ai_a)
+    r_brake = _find_brake(brk_r, d_r, si_r, ai_r)
+    a_throttle = _find_throttle(thr_a, d, ai_a, ei_a)
+    r_throttle = _find_throttle(thr_r, d_r, ai_r, ei_r)
+
+    a_min_speed = float(np.min(spd_a[si_a:ei_a + 1])) if ei_a > si_a else 0
+    r_min_speed = float(np.min(spd_r[si_r:ei_r + 1])) if ei_r > si_r else 0
+
+    a_exit_speed = float(spd_a[ei_a]) if ei_a < len(spd_a) else 0
+    r_exit_speed = float(spd_r[ei_r]) if ei_r < len(spd_r) else 0
+
+    # Classify error by severity
+    errors = []
+
+    # Late/early braking
+    if a_brake is not None and r_brake is not None:
+        brake_diff = a_brake - r_brake
+        if brake_diff < -8:
+            errors.append((
+                abs(brake_diff),
+                "early_brake",
+                "Zu frühes Bremsen",
+                f"Du bremst {abs(brake_diff):.0f}m früher als die Referenz.",
+                "Versuche den Bremspunkt nach hinten zu verschieben und mehr Speed in die Kurve mitzunehmen.",
+            ))
+        elif brake_diff > 8:
+            errors.append((
+                brake_diff,
+                "late_brake",
+                "Zu spätes Bremsen",
+                f"Du bremst {brake_diff:.0f}m später als die Referenz.",
+                "Bremse etwas früher, um den Apex sauber zu treffen und besseren Exit-Speed zu haben.",
+            ))
+
+    # Low minimum speed
+    min_speed_diff = a_min_speed - r_min_speed
+    if min_speed_diff < -5:
+        errors.append((
+            abs(min_speed_diff),
+            "low_min_speed",
+            "Zu niedriges Kurvenminimum",
+            f"Dein Minimum-Speed ist {abs(min_speed_diff):.0f} km/h langsamer als die Referenz.",
+            "Trage mehr Geschwindigkeit in die Kurve. Weniger aggressiv bremsen, sanfterer Lenkeinschlag.",
+        ))
+
+    # Bad traction / throttle pickup
+    if a_throttle is not None and r_throttle is not None:
+        thr_diff = a_throttle - r_throttle
+        if thr_diff > 8:
+            errors.append((
+                thr_diff,
+                "bad_traction",
+                "Schlechte Gasannahme / Traktion",
+                f"Du gehst {thr_diff:.0f}m später aufs Gas als die Referenz.",
+                "Gehe früher und progressiver ans Gas. Achte auf eine gute Linie zum Kurvenausgang.",
+            ))
+
+    exit_diff = a_exit_speed - r_exit_speed
+    if exit_diff < -5 and not any(e[1] == "bad_traction" for e in errors):
+        errors.append((
+            abs(exit_diff),
+            "bad_traction",
+            "Schlechte Gasannahme / Traktion",
+            f"Dein Exit-Speed ist {abs(exit_diff):.0f} km/h langsamer.",
+            "Arbeite an einer sauberen Linie zum Kurvenausgang für bessere Traktion.",
+        ))
+
+    if not errors:
+        return None, "", "", ""
+
+    # Return the most severe error
+    errors.sort(key=lambda e: e[0], reverse=True)
+    _, error_type, label, explanation, recommendation = errors[0]
+    return error_type, label, explanation, recommendation
+
+
+@app.get("/api/coaching/{session_id}/{lap_a}/{lap_b}", response_model=CoachingAnalysis)
+def get_coaching(session_id: str, lap_a: int, lap_b: int):
+    """Coaching analysis: segment deltas, error classification, focus zone.
+
+    lap_a = your lap (active), lap_b = reference lap.
+    Positive delta = lap_a is slower.
+    """
+    _, proc, _ = _get_session(session_id)
+    laps = proc.process()
+    la = next((l for l in laps if l.lap_number == lap_a), None)
+    lb = next((l for l in laps if l.lap_number == lap_b), None)
+    if la is None or lb is None:
+        raise HTTPException(404, "One or both laps not found.")
+
+    # Get corners from the reference lap
+    raw_corners = detect_corners(lb.speed, lb.distance, steering=lb.steering)
+
+    # Get cumulative delta
+    d_common, delta_arr = compute_delta(la, lb)
+
+    segments: list[SegmentAnalysis] = []
+    worst_segment: SegmentAnalysis | None = None
+
+    for c in raw_corners:
+        # Delta at corner: difference between entry and exit delta
+        si = int(np.searchsorted(d_common, c.distance_start))
+        ei = int(np.searchsorted(d_common, c.distance_end))
+        si = max(si, 0)
+        ei = min(ei, len(delta_arr) - 1)
+
+        if ei > si and len(delta_arr) > 0:
+            delta_at_corner = float(delta_arr[ei] - delta_arr[si])
+        else:
+            delta_at_corner = 0.0
+
+        error_type, error_label, explanation, recommendation = _classify_corner_error(
+            la, lb, c, delta_arr, d_common,
+        )
+
+        seg = SegmentAnalysis(
+            corner_id=c.id,
+            corner_name=c.name,
+            distance_start=c.distance_start,
+            distance_apex=c.distance_apex,
+            distance_end=c.distance_end,
+            delta_s=delta_at_corner,
+            error_type=error_type,
+            error_label=error_label,
+            explanation=explanation,
+            recommendation=recommendation,
+        )
+        segments.append(seg)
+
+        if worst_segment is None or delta_at_corner > worst_segment.delta_s:
+            worst_segment = seg
+
+    # Focus zone = segment with largest time loss
+    focus = None
+    main_message = ""
+    if worst_segment and worst_segment.delta_s > 0.01:
+        focus = FocusZone(
+            distance_start=worst_segment.distance_start,
+            distance_end=worst_segment.distance_end,
+            delta_s=worst_segment.delta_s,
+            corner_name=worst_segment.corner_name,
+        )
+        if worst_segment.error_label:
+            main_message = (
+                f"Dein größter Verlust ist in {worst_segment.corner_name} "
+                f"({worst_segment.delta_s * 1000:.0f}ms) — {worst_segment.error_label}"
+            )
+        else:
+            main_message = (
+                f"Dein größter Verlust ist in {worst_segment.corner_name} "
+                f"({worst_segment.delta_s * 1000:.0f}ms)"
+            )
+
+    return CoachingAnalysis(
+        segments=segments,
+        focus_zone=focus,
+        main_message=main_message,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Multi-driver endpoints
 # ---------------------------------------------------------------------------
 
@@ -304,6 +714,7 @@ def list_loaded_sessions():
             filename=sess.filename,
             driver=driver,
             track=meta.get("track", ""),
+            layout=meta.get("layout", ""),
             car=meta.get("car", ""),
             lap_count=len(laps),
         ))
@@ -433,19 +844,21 @@ def _generate_tips(
 
 
 @app.get("/api/compare/corners", response_model=CompareResponse)
-def compare_corners(track: Optional[str] = Query(None)):
+def compare_corners(track: Optional[str] = Query(None), layout: Optional[str] = Query(None)):
     """Cross-driver corner comparison for all loaded sessions on the same track.
 
     Uses each driver's fastest lap. Detects corners on the overall fastest
     lap, then extracts per-corner metrics from every driver and generates
     coaching tips.
     """
-    # Gather all sessions (optionally filtered by track)
+    # Gather all sessions (optionally filtered by track and layout)
     candidates: list[tuple[str, DuckDBSession, LapProcessor, str]] = []
     for sid, (sess, proc, driver) in _sessions.items():
         meta = sess.session_metadata()
         sess_track = meta.get("track", sess.filename)
         if track and sess_track.lower() != track.lower():
+            continue
+        if layout and meta.get("layout", "").lower() != layout.lower():
             continue
         candidates.append((sid, sess, proc, driver))
 
@@ -454,6 +867,7 @@ def compare_corners(track: Optional[str] = Query(None)):
 
     # Resolve effective track name from first match
     effective_track = candidates[0][1].session_metadata().get("track", "")
+    effective_layout = candidates[0][1].session_metadata().get("layout", "")
 
     # For each driver, find their fastest lap
     driver_best: dict[str, tuple[str, LapData]] = {}  # driver → (session_id, LapData)
@@ -471,7 +885,7 @@ def compare_corners(track: Optional[str] = Query(None)):
     # Detect corners on the overall fastest lap
     overall_best_driver = min(driver_best, key=lambda d: driver_best[d][1].lap_time_ms)
     ref_sid, ref_lap = driver_best[overall_best_driver]
-    raw_corners = detect_corners(ref_lap.speed, ref_lap.distance)
+    raw_corners = detect_corners(ref_lap.speed, ref_lap.distance, steering=ref_lap.steering)
 
     if not raw_corners:
         return CompareResponse(track=effective_track, corners=[], drivers=list(driver_best.keys()))
@@ -506,6 +920,92 @@ def compare_corners(track: Optional[str] = Query(None)):
 
     return CompareResponse(
         track=effective_track,
+        layout=effective_layout,
         corners=comparisons,
         drivers=list(driver_best.keys()),
     )
+
+
+# ---------------------------------------------------------------------------
+# Driver bests endpoint (best lap per driver for a track)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/driver-bests")
+def get_driver_bests(track: str = Query(...), layout: str = Query("")):
+    """Return the best session per driver for a given track.
+
+    Uses the session cache (background-scanned metadata) to find,
+    for each unique driver, the session with the fastest best_time
+    on the requested track.  Optionally filtered by layout.
+    """
+    _cache_ready.wait(timeout=15)
+    with _cache_lock:
+        items = list(_session_cache.values())
+
+    driver_best: dict[str, dict] = {}
+    for item in items:
+        item_track = item.get("track", "")
+        if item_track.lower() != track.lower():
+            continue
+        if layout and item.get("layout", "").lower() != layout.lower():
+            continue
+        driver = item.get("driver", "") or "Unknown"
+        best = item.get("best_time", 0)
+        if best <= 0:
+            continue
+        if driver not in driver_best or best < driver_best[driver]["best_time"]:
+            driver_best[driver] = item
+
+    return [
+        {
+            "driver": d,
+            "filename": info["filename"],
+            "best_time": info["best_time"],
+            "car": info.get("car", ""),
+            "session_type": info.get("session_type", ""),
+        }
+        for d, info in sorted(driver_best.items(), key=lambda x: x[1]["best_time"])
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Delete session endpoint
+# ---------------------------------------------------------------------------
+
+@app.delete("/api/session/delete")
+def delete_session_file(filename: str = Query(...)):
+    """Delete a .duckdb session file permanently."""
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or ".." in filename:
+        raise HTTPException(400, "Invalid filename.")
+    if not safe_name.lower().endswith(".duckdb"):
+        raise HTTPException(400, "Only .duckdb files can be deleted.")
+
+    fpath = Path(TELEMETRY_DIR) / safe_name
+    resolved = fpath.resolve()
+    telemetry_root = Path(TELEMETRY_DIR).resolve()
+    if not str(resolved).startswith(str(telemetry_root) + os.sep) and resolved != telemetry_root:
+        raise HTTPException(400, "Invalid filename.")
+    if not resolved.is_file():
+        raise HTTPException(404, f"File not found: {safe_name}")
+
+    # Close and remove any loaded sessions for this file first (releases file lock)
+    to_remove = [
+        sid for sid, (sess, _, _) in _sessions.items()
+        if os.path.basename(sess.filename) == safe_name
+    ]
+    for sid in to_remove:
+        try:
+            _sessions[sid][0].conn.close()
+        except Exception:
+            pass
+        del _sessions[sid]
+
+    # Remove the file
+    resolved.unlink()
+
+    # Remove from cache
+    with _cache_lock:
+        _session_cache.pop(safe_name, None)
+
+    return {"deleted": safe_name}

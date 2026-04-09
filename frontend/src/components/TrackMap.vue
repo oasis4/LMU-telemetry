@@ -4,7 +4,10 @@ import { useTelemetryStore } from '../stores/telemetry.js'
 
 const props = defineProps({
   distanceRange: { type: Object, default: null },
+  showRef: { type: Boolean, default: false },
 })
+
+const emit = defineEmits(['corner-click'])
 
 const store = useTelemetryStore()
 const svgRef = ref(null)
@@ -12,41 +15,173 @@ const containerRef = ref(null)
 const width = ref(800)
 const height = ref(300)
 
-// Normalise lat/lon to SVG viewport
-function normalise(arr, size, padding = 20) {
-  if (!arr || arr.length === 0) return []
-  const min = Math.min(...arr)
-  const max = Math.max(...arr)
-  const range = max - min || 1
-  return arr.map(v => padding + ((v - min) / range) * (size - 2 * padding))
+// When zoomed (distanceRange set), find index range for the visible portion
+function getVisibleRange(telemetry) {
+  if (!telemetry?.distance?.length || !props.distanceRange) return null
+  const { min, max } = props.distanceRange
+  const si = telemetry.distance.findIndex(d => d >= min)
+  const ei = telemetry.distance.findIndex(d => d > max)
+  return {
+    start: Math.max(0, si),
+    end: ei > 0 ? ei : telemetry.distance.length,
+  }
 }
 
-const activePath = computed(() => {
+// Build projection — auto-rotates track to fill available space optimally
+function buildProjection(w, h, padding = 20) {
   const t = store.activeTelemetry
-  if (!t || !t.lat?.length) return ''
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
-  return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x},${ys[i]}`).join(' ')
-})
+  if (!t?.lat?.length) return null
 
+  // Collect all points to consider (active + ref when shown)
+  const range = getVisibleRange(t)
+  const iStart = range ? range.start : 0
+  const iEnd = range ? range.end : t.lat.length
+
+  let latMin = Infinity, latMax = -Infinity
+  for (let i = iStart; i < iEnd; i++) {
+    if (t.lat[i] < latMin) latMin = t.lat[i]
+    if (t.lat[i] > latMax) latMax = t.lat[i]
+  }
+  if (props.showRef && store.refTelemetry?.lat?.length) {
+    const rr = getVisibleRange(store.refTelemetry)
+    const rs = rr ? rr.start : 0
+    const re = rr ? rr.end : store.refTelemetry.lat.length
+    for (let i = rs; i < re; i++) {
+      if (store.refTelemetry.lat[i] < latMin) latMin = store.refTelemetry.lat[i]
+      if (store.refTelemetry.lat[i] > latMax) latMax = store.refTelemetry.lat[i]
+    }
+  }
+
+  const midLat = (latMin + latMax) / 2
+  const cosLat = Math.cos(midLat * Math.PI / 180)
+
+  // Project all points to flat x/y coordinates
+  const pts = []
+  for (let i = iStart; i < iEnd; i++) {
+    pts.push({ x: t.lon[i] * cosLat, y: t.lat[i] })
+  }
+  if (props.showRef && store.refTelemetry?.lat?.length) {
+    const rr = getVisibleRange(store.refTelemetry)
+    const rs = rr ? rr.start : 0
+    const re = rr ? rr.end : store.refTelemetry.lat.length
+    for (let i = rs; i < re; i++) {
+      pts.push({ x: store.refTelemetry.lon[i] * cosLat, y: store.refTelemetry.lat[i] })
+    }
+  }
+
+  // Compute centroid
+  let cx = 0, cy = 0
+  for (const p of pts) { cx += p.x; cy += p.y }
+  cx /= pts.length; cy /= pts.length
+
+  // Find optimal rotation via PCA (principal axis alignment)
+  let sxx = 0, sxy = 0, syy = 0
+  for (const p of pts) {
+    const dx = p.x - cx, dy = p.y - cy
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy
+  }
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy)
+
+  const drawW = w - 2 * padding
+  const drawH = h - 2 * padding
+
+  // Pick the rotation (theta or theta+90°) that maximizes the scale
+  function fitScale(angle) {
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
+    const c = Math.cos(angle), s = Math.sin(angle)
+    for (const p of pts) {
+      const dx = p.x - cx, dy = p.y - cy
+      const rx = dx * c - dy * s, ry = dx * s + dy * c
+      if (rx < xMin) xMin = rx; if (rx > xMax) xMax = rx
+      if (ry < yMin) yMin = ry; if (ry > yMax) yMax = ry
+    }
+    return Math.min(drawW / ((xMax - xMin) || 1e-6), drawH / ((yMax - yMin) || 1e-6))
+  }
+  const bestAngle = fitScale(theta + Math.PI / 2) > fitScale(theta)
+    ? theta + Math.PI / 2 : theta
+
+  // Compute final bounds with best rotation
+  const cosA = Math.cos(bestAngle), sinA = Math.sin(bestAngle)
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
+  for (const p of pts) {
+    const dx = p.x - cx, dy = p.y - cy
+    const rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA
+    if (rx < xMin) xMin = rx; if (rx > xMax) xMax = rx
+    if (ry < yMin) yMin = ry; if (ry > yMax) yMax = ry
+  }
+  const bboxW = (xMax - xMin) || 1e-6
+  const bboxH = (yMax - yMin) || 1e-6
+  const scale = Math.min(drawW / bboxW, drawH / bboxH)
+  const projW = bboxW * scale
+  const projH = bboxH * scale
+  const offsetX = padding + (drawW - projW) / 2
+  const offsetY = padding + (drawH - projH) / 2
+
+  return {
+    project(lon, lat) {
+      const px = lon * cosLat
+      const dx = px - cx, dy = lat - cy
+      const rx = dx * cosA - dy * sinA
+      const ry = dx * sinA + dy * cosA
+      const x = offsetX + (rx - xMin) * scale
+      const y = offsetY + (yMax - ry) * scale
+      return { x, y }
+    }
+  }
+}
+
+function buildPath(telemetry, proj, range) {
+  if (!telemetry?.lat?.length || !proj) return ''
+  const parts = []
+  const iStart = range ? range.start : 0
+  const iEnd = range ? range.end : telemetry.lat.length
+  for (let i = iStart; i < iEnd; i++) {
+    const { x, y } = proj.project(telemetry.lon[i], telemetry.lat[i])
+    parts.push(`${i === iStart ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`)
+  }
+  return parts.join(' ')
+}
+
+const isZoomed = computed(() => !!props.distanceRange)
+
+const projection = computed(() => buildProjection(width.value, height.value))
+
+const activeRange = computed(() => getVisibleRange(store.activeTelemetry))
+const refRange = computed(() => getVisibleRange(store.refTelemetry))
+
+const activePath = computed(() => buildPath(store.activeTelemetry, projection.value, isZoomed.value ? activeRange.value : null))
 const refPath = computed(() => {
-  const t = store.refTelemetry
-  if (!t || !t.lat?.length) return ''
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
-  return xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x},${ys[i]}`).join(' ')
+  if (!props.showRef) return ''
+  return buildPath(store.refTelemetry, projection.value, isZoomed.value ? refRange.value : null)
 })
 
-// Corner markers
+// Corner markers with per-corner delta values
 const cornerMarkers = computed(() => {
   const t = store.activeTelemetry
-  if (!t || !t.distance?.length || !t.lat?.length) return []
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
+  const proj = projection.value
+  if (!t || !t.distance?.length || !t.lat?.length || !proj) return []
+  const d = store.delta
   return store.corners.map(c => {
-    const idx = t.distance.findIndex(d => d >= c.distance_apex)
+    // When zoomed, only show corners in range
+    if (isZoomed.value && props.distanceRange) {
+      if (c.distance_apex < props.distanceRange.min || c.distance_apex > props.distanceRange.max) return null
+    }
+    const idx = t.distance.findIndex(dd => dd >= c.distance_apex)
     if (idx < 0) return null
-    return { ...c, x: xs[idx], y: ys[idx] }
+    const { x, y } = proj.project(t.lon[idx], t.lat[idx])
+    let cornerDelta = null
+    if (d?.distance?.length) {
+      const si = d.distance.findIndex(dd => dd >= c.distance_start)
+      const ei = d.distance.findIndex(dd => dd >= c.distance_end)
+      if (si >= 0 && ei >= 0) cornerDelta = d.delta[ei] - d.delta[si]
+    }
+    const deltaColor = cornerDelta == null ? '#888'
+      : cornerDelta > 0.005 ? '#ef4444'
+      : cornerDelta < -0.005 ? '#22c55e' : '#888'
+    const deltaMs = cornerDelta == null ? ''
+      : cornerDelta > 0 ? `+${cornerDelta.toFixed(3)}s`
+      : `${cornerDelta.toFixed(3)}s`
+    return { ...c, x, y, deltaAtApex: cornerDelta, deltaColor, deltaLabel: deltaMs }
   }).filter(Boolean)
 })
 
@@ -54,26 +189,27 @@ const cornerMarkers = computed(() => {
 const deltaSegments = computed(() => {
   const t = store.activeTelemetry
   const d = store.delta
-  if (!t || !t.lat?.length || !d || !d.delta?.length) return []
+  const proj = projection.value
+  if (!t || !t.lat?.length || !d || !d.delta?.length || !proj) return []
 
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
+  const range = isZoomed.value ? activeRange.value : null
+  const iStart = range ? range.start : 0
+  const iEnd = range ? range.end : t.distance.length
 
   const segments = []
-  const step = Math.max(1, Math.floor(t.distance.length / 200))
-  for (let i = 0; i < t.distance.length - step; i += step) {
+  const totalPts = iEnd - iStart
+  const step = Math.max(1, Math.floor(totalPts / 300))
+  for (let i = iStart; i < iEnd - step; i += step) {
     const dist = t.distance[i]
     const deltaIdx = d.distance.findIndex(dd => dd >= dist)
     const deltaVal = deltaIdx >= 0 ? d.delta[deltaIdx] : 0
     let color = '#666'
-    if (deltaVal < -0.01) color = '#22c55e' // gaining
-    else if (deltaVal > 0.01) color = '#ef4444' // losing
-    segments.push({
-      x1: xs[i], y1: ys[i],
-      x2: xs[Math.min(i + step, xs.length - 1)],
-      y2: ys[Math.min(i + step, ys.length - 1)],
-      color,
-    })
+    if (deltaVal < -0.01) color = '#22c55e'
+    else if (deltaVal > 0.01) color = '#ef4444'
+    const p1 = proj.project(t.lon[i], t.lat[i])
+    const j = Math.min(i + step, iEnd - 1)
+    const p2 = proj.project(t.lon[j], t.lat[j])
+    segments.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color })
   }
   return segments
 })
@@ -81,13 +217,18 @@ const deltaSegments = computed(() => {
 // Cursor dot on track map
 const cursorDot = computed(() => {
   const t = store.activeTelemetry
-  if (!t || !t.distance?.length || store.cursorDistance == null) return null
-  const xs = normalise(t.lat, width.value)
-  const ys = normalise(t.lon, height.value)
+  const proj = projection.value
+  if (!t || !t.distance?.length || store.cursorDistance == null || !proj) return null
   const idx = t.distance.findIndex(d => d >= store.cursorDistance)
   if (idx < 0) return null
-  return { x: xs[idx], y: ys[idx] }
+  return proj.project(t.lon[idx], t.lat[idx])
 })
+
+// Legend info
+const hasRef = computed(() => props.showRef && !!store.refTelemetry?.lat?.length)
+const hasDelta = computed(() => !!store.delta?.distance?.length)
+const activeLapLabel = computed(() => store.activeLap ? `Lap ${store.activeLap.lap_number}` : 'Your Lap')
+const refLapLabel = computed(() => store.refLap ? `Lap ${store.refLap.lap_number}` : 'Reference')
 
 // Resize observer
 let observer = null
@@ -109,7 +250,7 @@ onBeforeUnmount(() => {
 })
 
 function onCornerClick(c) {
-  store.setActiveCorner(c)
+  emit('corner-click', c)
 }
 </script>
 
@@ -121,6 +262,17 @@ function onCornerClick(c) {
       :height="height"
       :viewBox="`0 0 ${width} ${height}`"
     >
+      <!-- Reference path (when showRef) -->
+      <path
+        v-if="refPath"
+        :d="refPath"
+        fill="none"
+        stroke="#f97316"
+        stroke-width="2"
+        opacity="0.7"
+        stroke-dasharray="6 3"
+      />
+
       <!-- Delta colored segments -->
       <line
         v-for="(seg, i) in deltaSegments"
@@ -132,26 +284,16 @@ function onCornerClick(c) {
         stroke-linecap="round"
       />
 
-      <!-- Reference lap path -->
-      <path
-        v-if="refPath"
-        :d="refPath"
-        fill="none"
-        stroke="#f97316"
-        stroke-width="1.5"
-        opacity="0.6"
-      />
-
-      <!-- Active lap path (drawn on top if no delta) -->
+      <!-- Active lap path (if no delta data yet) -->
       <path
         v-if="activePath && !deltaSegments.length"
         :d="activePath"
         fill="none"
         stroke="#3b82f6"
-        stroke-width="2"
+        stroke-width="2.5"
       />
 
-      <!-- Corner markers -->
+      <!-- Corner markers with delta labels -->
       <g
         v-for="m in cornerMarkers"
         :key="'corner-' + m.id"
@@ -159,21 +301,34 @@ function onCornerClick(c) {
         @click="onCornerClick(m)"
       >
         <circle
-          :cx="m.x" :cy="m.y" r="10"
-          :fill="store.activeCorner?.id === m.id ? '#3b82f6' : '#1e1e2e'"
-          stroke="#3b82f6"
-          stroke-width="1"
+          :cx="m.x" :cy="m.y" r="13"
+          :fill="store.activeCorner?.id === m.id ? '#f97316' : m.deltaColor || '#e63946'"
+          :stroke="store.activeCorner?.id === m.id ? '#fff' : 'rgba(0,0,0,0.5)'"
+          stroke-width="1.5"
         />
         <text
           :x="m.x" :y="m.y"
           text-anchor="middle"
           dominant-baseline="central"
-          fill="#e0e0e0"
-          font-size="9"
+          fill="#fff"
+          font-size="10"
           font-family="Inter, sans-serif"
-          font-weight="600"
+          font-weight="700"
         >
           {{ m.id }}
+        </text>
+        <!-- Delta label -->
+        <text
+          v-if="m.deltaLabel"
+          :x="m.x + 18" :y="m.y - 2"
+          text-anchor="start"
+          dominant-baseline="central"
+          :fill="m.deltaColor"
+          font-size="11"
+          font-family="'JetBrains Mono', monospace"
+          font-weight="600"
+        >
+          {{ m.deltaLabel }}
         </text>
       </g>
 
@@ -187,6 +342,26 @@ function onCornerClick(c) {
         stroke-width="2"
       />
     </svg>
+
+    <!-- Legend -->
+    <div class="map-legend" v-if="hasDelta || hasRef">
+      <div class="legend-item" v-if="hasDelta">
+        <span class="legend-line" style="background: #22c55e;"></span>
+        <span class="legend-text">{{ activeLapLabel }} (schneller)</span>
+      </div>
+      <div class="legend-item" v-if="hasDelta">
+        <span class="legend-line" style="background: #ef4444;"></span>
+        <span class="legend-text">{{ activeLapLabel }} (langsamer)</span>
+      </div>
+      <div class="legend-item" v-if="!hasDelta">
+        <span class="legend-line" style="background: #3b82f6;"></span>
+        <span class="legend-text">{{ activeLapLabel }}</span>
+      </div>
+      <div class="legend-item" v-if="hasRef">
+        <span class="legend-line dashed" style="background: #f97316;"></span>
+        <span class="legend-text">{{ refLapLabel }} (Referenz)</span>
+      </div>
+    </div>
 
     <div v-if="!activePath" class="no-data">No track data available</div>
   </div>
@@ -216,5 +391,41 @@ function onCornerClick(c) {
   justify-content: center;
   color: var(--text-muted);
   font-size: 14px;
+}
+.map-legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(15, 15, 20, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  pointer-events: none;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-line {
+  width: 16px;
+  height: 3px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+.legend-line.dashed {
+  background: repeating-linear-gradient(
+    90deg,
+    #f97316 0px, #f97316 4px,
+    transparent 4px, transparent 7px
+  ) !important;
+}
+.legend-text {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 </style>

@@ -11,17 +11,11 @@ const store = useTelemetryStore()
         <router-link :to="{ name: 'sessions' }">
           Sessions
         </router-link>
-        <router-link v-if="store.currentSession" :to="{ name: 'laps', params: { sessionId: store.sessionId } }">
-          Laps
-        </router-link>
-        <router-link v-if="store.currentSession" :to="{ name: 'analysis', params: { sessionId: store.sessionId } }">
-          Analysis
-        </router-link>
-        <router-link v-if="store.currentSession" :to="{ name: 'report', params: { sessionId: store.sessionId } }">
-          Report
+        <router-link v-if="store.currentSession" :to="{ name: 'dashboard', params: { sessionId: store.sessionId } }">
+          Dashboard
         </router-link>
         <router-link :to="{ name: 'compare' }">
-          Drivers
+          Compare
         </router-link>
       </nav>
       <div class="session-info" v-if="store.currentSession">
@@ -116,7 +110,7 @@ const store = useTelemetryStore()
   display: flex;
   align-items: center;
   gap: 24px;
-  padding: 0 20px;
+  padding: 0 24px;
   height: 48px;
   background: #111114;
   border-bottom: 1px solid #1e1e2e;
@@ -124,32 +118,34 @@ const store = useTelemetryStore()
 }
 .logo {
   font-family: 'Inter', sans-serif;
-  font-weight: 700;
+  font-weight: 800;
   font-size: 15px;
   letter-spacing: 0.5px;
   color: #e0e0e0;
 }
 .logo .accent {
-  color: #3b82f6;
+  color: #c8ff00;
 }
 nav {
   display: flex;
-  gap: 16px;
+  gap: 20px;
 }
 nav a {
-  color: #888;
+  color: #666;
   text-decoration: none;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   transition: color 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 nav a:hover, nav a.router-link-active {
-  color: #3b82f6;
+  color: #c8ff00;
 }
 .session-info {
   margin-left: auto;
-  color: #666;
-  font-size: 12px;
+  color: #777;
+  font-size: 13px;
   font-family: 'JetBrains Mono', monospace;
 }
 </style>
