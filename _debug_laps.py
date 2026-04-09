@@ -1,53 +1,124 @@
-"""Debug: inspect lap data from a Portimao session."""
+"""Debug script to examine lap time detection and validity issues."""
+import sys, os, glob
+import duckdb
+import numpy as np
+
+TDIR = os.environ.get("TELEMETRY_DIR", r"F:\SteamLibrary\steamapps\common\Le Mans Ultimate\UserData\Telemetry")
+
+files = sorted(glob.glob(os.path.join(TDIR, "*.duckdb")))
+if not files:
+    print("No files found in", TDIR)
+    sys.exit(1)
+
+# Pick the latest file (most recent session)
+fpath = files[-1]
+# Also test with a race file if available
+practice_files = [f for f in files if '_P_' in os.path.basename(f)]
+if practice_files:
+    fpath = practice_files[-1]
+    print(f"=== Analyzing: {os.path.basename(fpath)} ===\n")
+
+conn = duckdb.connect(fpath, read_only=True)
+
+# 1. Check Lap event table
+print("--- Lap Events ---")
+try:
+    df = conn.execute('SELECT ts, value FROM "Lap" ORDER BY ts').fetchdf()
+    print(f"  {len(df)} events")
+    for _, row in df.iterrows():
+        print(f"  ts={row['ts']:.2f}  lap={int(row['value'])}")
+except Exception as e:
+    print(f"  ERROR: {e}")
+
+# 2. Check LapTime event table
+print("\n--- LapTime Events ---")
+for tbl in ["Current LapTime", "Lap Time"]:
+    try:
+        df = conn.execute(f'SELECT ts, value FROM "{tbl}" ORDER BY ts').fetchdf()
+        print(f"  Table '{tbl}': {len(df)} events")
+        for _, row in df.iterrows():
+            secs = row['value']
+            mins = int(secs // 60)
+            remainder = secs - mins * 60
+            print(f"  ts={row['ts']:.2f}  time={secs:.3f}s ({mins}:{remainder:06.3f})")
+        break
+    except Exception:
+        continue
+
+# 3. Check Sector events
+print("\n--- Sector1 Events ---")
+try:
+    df = conn.execute('SELECT ts, value FROM "Current Sector1" ORDER BY ts').fetchdf()
+    print(f"  {len(df)} events")
+    for _, row in df.iterrows():
+        print(f"  ts={row['ts']:.2f}  s1={row['value']:.3f}s")
+except Exception as e:
+    print(f"  ERROR: {e}")
+
+print("\n--- Sector2 Events (cumulative S1+S2) ---")
+try:
+    df = conn.execute('SELECT ts, value FROM "Current Sector2" ORDER BY ts').fetchdf()
+    print(f"  {len(df)} events")
+    for _, row in df.iterrows():
+        print(f"  ts={row['ts']:.2f}  s1+s2={row['value']:.3f}s")
+except Exception as e:
+    print(f"  ERROR: {e}")
+
+# 4. GPS Time range
+print("\n--- GPS Time Range ---")
+try:
+    df = conn.execute('SELECT MIN(value) as tmin, MAX(value) as tmax FROM "GPS Time"').fetchdf()
+    print(f"  min={df['tmin'].iloc[0]:.2f}  max={df['tmax'].iloc[0]:.2f}  span={df['tmax'].iloc[0]-df['tmin'].iloc[0]:.2f}s")
+except Exception as e:
+    print(f"  ERROR: {e}")
+
+# 5. Now run the actual LapProcessor and show results
+print("\n--- LapProcessor Output ---")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from backend.duckdb_reader import DuckDBSession
 from backend.lap_processor import LapProcessor
-import os
 
-tdir = r'F:/SteamLibrary/steamapps/common/Le Mans Ultimate/UserData/Telemetry'
-files = [f for f in os.listdir(tdir) if 'Algarve' in f and f.endswith('.duckdb')]
-print(f'Found {len(files)} Algarve files')
-if files:
-    fn = files[-1]
-    print(f'Using: {fn}')
-    sess = DuckDBSession(os.path.join(tdir, fn))
-    proc = LapProcessor(sess)
-    laps = proc.process()
-    print(f'Total laps: {len(laps)}')
-    for l in laps:
-        secs = [f'{s:.0f}' for s in l.sectors] if l.sectors else []
-        t_sec = l.lap_time_ms / 1000
-        m = int(t_sec) // 60
-        s = t_sec - m * 60
-        print(f'  Lap {l.lap_number:2d}: {m}:{s:06.3f}  ({l.lap_time_ms:.0f}ms)  valid={l.valid}  sectors_ms={secs}')
+sess = DuckDBSession(fpath)
+proc = LapProcessor(sess)
+laps = proc.process()
 
-    valid = [l for l in laps if l.valid and l.lap_time_ms > 0]
-    print(f'\nValid laps: {len(valid)}')
-    if valid:
-        fastest = min(l.lap_time_ms for l in valid)
-        t_sec = fastest / 1000
-        m = int(t_sec) // 60
-        s = t_sec - m * 60
-        print(f'Fastest valid: {m}:{s:06.3f}')
+print(f"  {len(laps)} laps detected")
+for l in laps:
+    ms = l.lap_time_ms
+    mins = int(ms // 60000)
+    secs = (ms % 60000) / 1000
+    sectors_str = ""
+    if l.sectors:
+        sectors_str = " sectors=[" + ", ".join(f"{s/1000:.3f}s" for s in l.sectors) + "]"
+        sectors_str += f" matched={l.sectors_matched}"
+    print(f"  Lap {l.lap_number:>2}: {mins}:{secs:06.3f}  valid={l.valid}  dist={l.distance[-1]:.0f}m{sectors_str}")
 
-    # Theoretical best sectors
-    source = valid if valid else laps
-    n_sectors = max((len(l.sectors) for l in source), default=0)
-    best_sectors = []
-    for si in range(n_sectors):
-        vals = sorted([l.sectors[si] for l in source if si < len(l.sectors) and l.sectors[si] > 0])
-        if vals:
-            median = vals[len(vals) // 2]
-            print(f'  Sector {si+1}: min={vals[0]:.0f}ms  median={median:.0f}ms  values={[f"{v:.0f}" for v in vals]}')
-            # Filter out < 70% of median
-            filtered = [v for v in vals if v >= median * 0.7]
-            best = min(filtered) if filtered else vals[0]
-            best_sectors.append(best)
-        else:
-            best_sectors.append(0)
-    
-    if best_sectors:
-        theo = sum(best_sectors)
-        t_sec = theo / 1000
-        m = int(t_sec) // 60
-        s = t_sec - m * 60
-        print(f'\nTheoretical best: {m}:{s:06.3f}  (sectors: {[f"{s:.0f}" for s in best_sectors]})')
+# 6. Check if there's an InvalidLap or similar table
+print("\n--- Checking for invalidity-related tables ---")
+try:
+    tables = conn.execute("SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE'").fetchall()
+    invalid_tables = [t[0] for t in tables if 'invalid' in t[0].lower() or 'penalty' in t[0].lower() or 'cut' in t[0].lower() or 'flag' in t[0].lower()]
+    if invalid_tables:
+        for t in invalid_tables:
+            df = conn.execute(f'SELECT * FROM "{t}"').fetchdf()
+            print(f"  Table '{t}': {len(df)} rows")
+            print(f"    columns: {list(df.columns)}")
+            if len(df) > 0:
+                print(df.to_string(index=False))
+    else:
+        # Search more broadly
+        for t in [t[0] for t in tables]:
+            tl = t.lower()
+            if any(kw in tl for kw in ['lap', 'valid', 'status']):
+                try:
+                    cnt = conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                    cols = conn.execute(f'PRAGMA table_info("{t}")').fetchall()
+                    col_names = [c[1] for c in cols]
+                    print(f"  '{t}': {cnt} rows, cols={col_names}")
+                except:
+                    pass
+except Exception as e:
+    print(f"  ERROR: {e}")
+
+conn.close()
+sess.close()

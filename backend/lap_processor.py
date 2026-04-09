@@ -46,6 +46,7 @@ class LapData:
     valid: bool = True
     sectors: list[float] = field(default_factory=list)  # ms per sector
     sectors_matched: bool = False  # True if sectors came from real events
+    time_matched: bool = False     # True if lap time came from a real event
 
     # distance-sampled arrays
     distance: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -182,6 +183,11 @@ class LapProcessor:
         # --- detect lap boundaries from Lap Dist resets --------------------
         boundaries = self._detect_boundaries_from_dist(dist_raw)
 
+        # Sector flag events (game-reported invalidity: value 3 = invalid sector)
+        s1_flag_evt = sess.get_events("sector1_flag")
+        s2_flag_evt = sess.get_events("sector2_flag")
+        s3_flag_evt = sess.get_events("sector3_flag")
+
         # Build continuous lap-number array from Lap events (forward-fill)
         if lap_evt is not None:
             lap_num_arr = DuckDBSession.expand_events(
@@ -200,7 +206,15 @@ class LapProcessor:
             mid_idx = (si + ei) // 2
             lap_n = int(lap_num_arr[mid_idx])
             if lap_n <= 0:
-                lap_n = len(merged_boundaries) + 1
+                if lap_evt is not None:
+                    # Lap events exist — keep lap_n=0 so all pre-race/out-lap
+                    # segments merge together instead of colliding with real
+                    # lap numbers (1, 2, …).
+                    lap_n = 0
+                else:
+                    # No Lap events — assign unique sequential numbers to
+                    # prevent all segments from merging into one.
+                    lap_n = len(merged_boundaries) + 1
             if merged_boundaries and merged_boundaries[-1][2] == lap_n:
                 # Same lap number as previous segment → merge
                 prev_si, _, _ = merged_boundaries[-1]
@@ -208,9 +222,12 @@ class LapProcessor:
             else:
                 merged_boundaries.append((si, ei, lap_n))
 
-        # Determine the typical full-lap distance (longest merged segment)
+        # Determine the typical full-lap distance (longest merged segment).
+        # Exclude lap 0 (out-lap/formation) as it can span multiple distance
+        # segments and inflate the threshold.
         seg_dists = []
-        for si, ei, _ in merged_boundaries:
+        seg_dists_real = []  # from real laps only (lap_num > 0)
+        for si, ei, lap_n in merged_boundaries:
             d_seg = dist_raw[si:ei + 1]
             # For merged segments, total distance = sum of sub-segment distances
             total = 0.0
@@ -221,7 +238,10 @@ class LapProcessor:
                     sub_start = i
             total += float(dist_raw[ei] - dist_raw[sub_start])
             seg_dists.append(total)
-        max_seg_dist = max(seg_dists) if seg_dists else 0.0
+            if lap_n > 0:
+                seg_dists_real.append(total)
+        reference_dists = seg_dists_real if seg_dists_real else seg_dists
+        max_seg_dist = max(reference_dists) if reference_dists else 0.0
         min_full_lap = max_seg_dist * 0.75 if max_seg_dist > 500 else 500.0
 
         # Build lap interval mapping: lap_number → (start_gps_time, end_gps_time)
@@ -289,18 +309,20 @@ class LapProcessor:
                             break
 
                 # Sector events fire DURING the lap (between t_lo and t_hi)
-                if matched_time and sector1_evt is not None and sector2_evt is not None:
+                if matched_time and sector1_evt is not None:
                     s1 = 0.0
                     s2_cumul = 0.0
                     for s1_i in range(len(sector1_evt[0])):
                         if t_lo + 1 < sector1_evt[0][s1_i] < t_hi + 5:
                             s1 = float(sector1_evt[1][s1_i])
                             break
-                    for s2_i in range(len(sector2_evt[0])):
-                        if t_lo + 1 < sector2_evt[0][s2_i] < t_hi + 5:
-                            s2_cumul = float(sector2_evt[1][s2_i])
-                            break
+                    if sector2_evt is not None:
+                        for s2_i in range(len(sector2_evt[0])):
+                            if t_lo + 1 < sector2_evt[0][s2_i] < t_hi + 5:
+                                s2_cumul = float(sector2_evt[1][s2_i])
+                                break
                     if s1 > 0 and s2_cumul > s1:
+                        # Full 3-sector split
                         s2_delta = s2_cumul - s1
                         s3 = lap_time_ms / 1000 - s2_cumul
                         sectors_ms = [
@@ -309,6 +331,16 @@ class LapProcessor:
                             s3 * 1000,
                         ]
                         matched_sectors = True
+                    elif s1 > 0:
+                        # S2 event missing (common in early race laps) —
+                        # provide partial split: S1 matched, remainder as S2+S3
+                        remainder = lap_time_ms / 1000 - s1
+                        sectors_ms = [
+                            s1 * 1000,
+                            remainder * 500,  # rough 50/50 split of remainder
+                            remainder * 500,
+                        ]
+                        # NOT marked as matched_sectors (used for display only)
 
             # If still no match, compute from time axis
             if not matched_time:
@@ -345,6 +377,7 @@ class LapProcessor:
                 valid=True,
                 sectors=sectors_ms,
                 sectors_matched=matched_sectors,
+                time_matched=matched_time,
                 distance=d_new,
                 speed=_resample(lap_speed),
                 throttle=_resample(throttle[sl]),
@@ -373,17 +406,21 @@ class LapProcessor:
 
         # --- Mark invalid laps -----------------------------------------------
         # Step 1: basic time-based filtering
-        valid_times = [l.lap_time_ms for l in laps if l.lap_time_ms > 0]
+        # Prefer time_matched laps for computing reference times — these are
+        # game-confirmed and don't include outlaps/formation laps whose
+        # synthetic times can skew the median in short sessions.
+        matched_times = [l.lap_time_ms for l in laps
+                         if l.time_matched and l.lap_time_ms > 0]
+        all_times = [l.lap_time_ms for l in laps if l.lap_time_ms > 0]
+        valid_times = matched_times if matched_times else all_times
         if not valid_times:
             self._laps = laps
             return laps
 
-        # Use median as reference instead of fastest (avoids race-start laps
-        # skewing the threshold — a fast formation lap shouldn't be the anchor)
         sorted_times = sorted(valid_times)
         median_time = sorted_times[len(sorted_times) // 2]
-        threshold = median_time * 1.2  # 20% slower than median = invalid
-        too_fast = median_time * 0.85  # 15% faster than median = suspicious
+        threshold = median_time * 1.5  # 50% slower than median = invalid
+        too_fast = median_time * 0.80  # 20% faster than median = suspicious
 
         for l in laps:
             if l.lap_time_ms <= 0 or l.lap_time_ms > threshold:
@@ -393,10 +430,46 @@ class LapProcessor:
         if len(laps) > 1:
             laps[0].valid = False
 
-        # Step 3: detect laps with broken sector patterns.
-        # If a lap has sectors where any sector proportion is wildly different
-        # from the majority, mark it invalid.
-        laps_with_sectors = [l for l in laps if l.valid and len(l.sectors) >= 2
+        # Step 3: laps without matched lap time are game-invalid.
+        # When LMU considers a lap invalid (off-track, cutting), it does NOT
+        # record a LapTime event for that lap.  Detect this: if most laps
+        # have time_matched=True, mark unmatched laps as invalid.
+        n_matched = sum(1 for l in laps if l.time_matched)
+        if n_matched > len(laps) // 2:
+            for l in laps:
+                if not l.time_matched:
+                    l.valid = False
+
+        # Step 4: game-reported sector invalidation from Sector Flag tables.
+        # Value 3 in a Sector Flag event = that sector was invalidated.
+        # IMPORTANT: Only apply to laps WITHOUT a matched LapTime event.
+        # If the game recorded a LapTime, it considers the lap valid —
+        # sector flags are UI display state that can echo previous laps.
+        if lap_intervals:
+            for l in laps:
+                if not l.valid or l.time_matched:
+                    continue
+                if l.lap_number not in lap_intervals:
+                    continue
+                t_lo, t_hi = lap_intervals[l.lap_number]
+
+                for flag_evt in (s1_flag_evt, s2_flag_evt, s3_flag_evt):
+                    if flag_evt is None:
+                        continue
+                    last_val = None
+                    for fi in range(len(flag_evt[0])):
+                        if t_lo < flag_evt[0][fi] < t_hi:
+                            last_val = int(flag_evt[1][fi])
+                    if last_val == 3:
+                        l.valid = False
+                        break
+
+        # Step 5: detect laps with broken sector patterns.
+        # Only use laps with game-matched sectors to compute the median
+        # (distance-thirds fallback sectors have different proportions
+        # and would pollute the baseline).
+        laps_with_sectors = [l for l in laps if l.valid and l.sectors_matched
+                             and len(l.sectors) >= 2
                              and all(s > 0 for s in l.sectors)]
         if len(laps_with_sectors) >= 3:
             # Compute sector proportions (sector_i / lap_time) per lap
@@ -422,7 +495,7 @@ class LapProcessor:
                             l.valid = False
                             break
 
-        # Step 4: laps too fast compared to median are suspect
+        # Step 6: laps too fast compared to median are suspect
         for l in laps:
             if l.valid and l.lap_time_ms < too_fast:
                 l.valid = False

@@ -49,6 +49,9 @@ PREFERRED_TABLES: dict[str, list[str]] = {
     "sector1_time":   ["Current Sector1"],
     "sector2_time":   ["Current Sector2"],
     "lap_time":       ["Current LapTime", "Lap Time"],
+    "sector1_flag":   ["Sector1 Flag"],
+    "sector2_flag":   ["Sector2 Flag"],
+    "sector3_flag":   ["Sector3 Flag"],
     "g_lat":          ["G Force Lat"],
     "g_long":         ["G Force Long"],
 }
@@ -243,6 +246,7 @@ class DuckDBSession:
                     meta["car"] = kv.get("carname", kv.get("vehiclename", kv.get("car", "")))
                     meta["car_class"] = kv.get("carclass", "")
                     meta["session_type"] = kv.get("sessiontype", "")
+                    meta["layout"] = kv.get("tracklayout", "")
                     if kv.get("trackname"):
                         meta["track"] = kv.get("trackname", "")
                 else:
@@ -290,6 +294,7 @@ def quick_file_scan(path: str) -> dict[str, Any]:
     info["car"] = ""
     info["car_class"] = ""
     info["driver"] = ""
+    info["layout"] = ""
     info["lap_count"] = 0
     info["best_time"] = 0.0
 
@@ -309,6 +314,7 @@ def quick_file_scan(path: str) -> dict[str, Any]:
             info["driver"] = kv.get("drivername", kv.get("driver", ""))
             info["car"] = kv.get("carname", kv.get("vehiclename", ""))
             info["car_class"] = kv.get("carclass", "")
+            info["layout"] = kv.get("tracklayout", "")
             if kv.get("sessiontype"):
                 info["session_type"] = kv["sessiontype"]
             if kv.get("trackname"):

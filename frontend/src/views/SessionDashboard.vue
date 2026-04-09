@@ -6,6 +6,7 @@ import TrackMap from '../components/TrackMap.vue'
 import TelemetryChart from '../components/TelemetryChart.vue'
 import DeltaStrip from '../components/DeltaStrip.vue'
 import CoachingTip from '../components/CoachingTip.vue'
+import axios from 'axios'
 
 const props = defineProps({ sessionId: String })
 const store = useTelemetryStore()
@@ -92,13 +93,111 @@ const driverBests = computed(() => store.driverBests || [])
 // Track the dropdown value directly from user selection
 const refValue = ref('')
 
-async function onRefChange() {
-  const val = refValue.value
+// Human-readable reference label
+const refLabel = computed(() => {
+  if (!store.refLap) return null
+  const v = refValue.value
+  if (v === 'composite') return { type: 'Composite', lap: 'Best Composite', time: formatTime(store.refLap.lap_time_ms), cross: false }
+  if (v.startsWith('popup:')) {
+    const parts = v.split(':')
+    const session = refPopupSession.value
+    return { type: 'Cross-Session', lap: `Lap ${store.refLap.lap_number}`, time: formatTime(store.refLap.lap_time_ms), cross: true, driver: session?.driver, car: session?.car }
+  }
+  return { type: 'Same Session', lap: `Lap ${store.refLap.lap_number}`, time: formatTime(store.refLap.lap_time_ms), cross: false }
+})
+
+// ── Reference popup state ──
+const showRefPopup = ref(false)
+const refPopupDriver = ref('')
+const refPopupSort = ref('time-asc')
+const refPopupSession = ref(null)   // selected session in popup
+const refPopupLaps = ref([])        // laps for selected session
+const refPopupLoading = ref(false)
+
+const TYPE_COLORS = { Practice: '#3b82f6', Qualifying: '#f97316', Race: '#22c55e' }
+
+// Sessions for the popup: same track, optionally filtered by driver
+const refPopupSessions = computed(() => {
+  const track = store.currentSession?.track
+  if (!track) return []
+  let list = store.sessions.filter(s => s.track === track)
+  if (refPopupDriver.value) list = list.filter(s => s.driver === refPopupDriver.value)
+  switch (refPopupSort.value) {
+    case 'time-asc':  list.sort((a, b) => (a.best_time || Infinity) - (b.best_time || Infinity)); break
+    case 'date-desc': list.sort((a, b) => parseDate(b.date) - parseDate(a.date)); break
+    case 'date-asc':  list.sort((a, b) => parseDate(a.date) - parseDate(b.date)); break
+  }
+  return list
+})
+
+// Driver options for popup (same track)
+const refPopupDriverOptions = computed(() => {
+  const track = store.currentSession?.track
+  if (!track) return []
+  const set = new Set()
+  store.sessions.filter(s => s.track === track).forEach(s => { if (s.driver) set.add(s.driver) })
+  return [...set].sort()
+})
+
+/** Parse DD.MM.YYYY HH:MM → timestamp for sorting */
+function parseDate(dateStr) {
+  if (!dateStr) return 0
+  const m = dateStr.match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/)
+  if (!m) return 0
+  return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]).getTime()
+}
+
+function openRefPopup() {
+  // Make sure sessions are loaded
+  if (!store.sessions.length) store.fetchSessions()
+  refPopupDriver.value = ''
+  refPopupSession.value = null
+  refPopupLaps.value = []
+  showRefPopup.value = true
+}
+
+async function refPopupSelectSession(s) {
+  refPopupSession.value = s
+  refPopupLaps.value = []
+  refPopupLoading.value = true
+  try {
+    const { data: sess } = await axios.post('/api/load', null, {
+      params: { filename: s.filename, driver: s.driver || '' }
+    })
+    refPopupSession.value = { ...s, session_id: sess.session_id }
+    const { data: lapData } = await axios.get(`/api/laps/${sess.session_id}`)
+    refPopupLaps.value = lapData.laps.filter(l => l.valid !== false && l.lap_time_ms > 0)
+  } catch (e) {
+    console.error('refPopup session error', e)
+  } finally {
+    refPopupLoading.value = false
+  }
+}
+
+async function refPopupSelectLap(lap) {
+  if (!refPopupSession.value?.session_id) return
+  showRefPopup.value = false
+  try {
+    await store.loadCrossSessionRef(refPopupSession.value.session_id, lap.lap_number)
+    if (store.refLap) store.refLap._crossSession = true
+    refValue.value = `popup:${refPopupSession.value.filename}:${lap.lap_number}`
+  } catch (e) {
+    console.error('refPopup lap error', e)
+  }
+}
+
+// Watch refValue for changes (more reliable than @change on <select>)
+watch(refValue, async (val, oldVal) => {
+  if (!val || val === oldVal || val.startsWith('popup:')) return
   try {
     if (val === 'composite') {
+      // Skip if already loaded
+      if (store.refLap?.lap_number === 0 && store.refTelemetry) return
       await store.selectRefLap(0)
     } else if (val.startsWith('lap:')) {
-      await store.selectRefLap(Number(val.substring(4)))
+      const n = Number(val.substring(4))
+      if (store.refLap?.lap_number === n && store.refTelemetry && !store.refLap._crossSession) return
+      await store.selectRefLap(n)
     } else if (val.startsWith('driver:')) {
       const filename = val.substring(7)
       const db = driverBests.value.find(d => d.filename === filename)
@@ -107,7 +206,7 @@ async function onRefChange() {
   } catch (err) {
     console.error('ref change error', err)
   }
-}
+})
 
 function selectLap(lap) {
   store.selectActiveLap(lap.lap_number)
@@ -133,8 +232,8 @@ watch(() => store.refLap, (lap) => {
 }, { immediate: true })
 
 // Fetch driver bests when session loads
-watch(() => store.currentSession?.track, (track) => {
-  if (track) store.fetchDriverBests(track)
+watch(() => [store.currentSession?.track, store.currentSession?.layout], ([track, layout]) => {
+  if (track) store.fetchDriverBests(track, layout || '')
 }, { immediate: true })
 
 // Client-side coaching
@@ -229,6 +328,7 @@ onMounted(() => {
           <div>
             <div class="car-name">{{ store.currentSession.car }}</div>
             <div class="track-name">{{ store.currentSession.track }}</div>
+            <div class="layout-name" v-if="store.currentSession.layout">{{ store.currentSession.layout }}</div>
           </div>
         </div>
         <div class="session-date" v-if="sessionMeta.date">{{ sessionMeta.type }} · {{ sessionMeta.date }}</div>
@@ -285,7 +385,7 @@ onMounted(() => {
           <span class="panel-badge" v-if="store.refLap">Lap {{ store.refLap.lap_number }}</span>
         </div>
         <div class="panel-body" v-show="panelOpen.ref">
-          <select class="ref-select" v-model="refValue" @change="onRefChange">
+          <select class="ref-select" v-model="refValue">
             <option value="" disabled>Referenz wählen…</option>
             <optgroup label="Diese Session">
               <option v-if="store.compositeAvailable" value="composite">
@@ -295,12 +395,20 @@ onMounted(() => {
                 Lap {{ l.lap_number }} — {{ formatTime(l.lap_time_ms) }}{{ !l.valid ? ' ⚠' : '' }}
               </option>
             </optgroup>
-            <optgroup label="Beste pro Fahrer" v-if="driverBests.length">
-              <option v-for="db in driverBests" :key="db.filename" :value="'driver:' + db.filename">
-                {{ db.driver }} — {{ fmtTimeSec(db.best_time) }} ({{ db.car }})
-              </option>
-            </optgroup>
           </select>
+          <button class="btn-ref-popup" @click="openRefPopup">
+            Andere Session wählen…
+          </button>
+
+          <!-- Active reference indicator -->
+          <div class="ref-indicator" v-if="store.refLap">
+            <div class="ref-indicator-dot"></div>
+            <div class="ref-indicator-info">
+              <span class="ref-indicator-lap mono">{{ refLabel?.lap }} — {{ refLabel?.time }}</span>
+              <span class="ref-indicator-meta" v-if="refLabel?.cross">{{ refLabel.driver || '' }} {{ refLabel.car ? '· ' + refLabel.car : '' }}</span>
+              <span class="ref-indicator-meta" v-else>{{ refLabel?.type }}</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -343,7 +451,7 @@ onMounted(() => {
     <div class="main-area">
       <!-- Track map -->
       <div class="map-panel">
-        <TrackMap :distance-range="distanceRange" @corner-click="onCornerClick" />
+        <TrackMap :distance-range="distanceRange" :show-ref="true" @corner-click="onCornerClick" />
       </div>
 
       <!-- Charts panel -->
@@ -382,6 +490,83 @@ onMounted(() => {
         <CoachingTip v-if="store.activeCorner" />
       </div>
     </div>
+
+    <!-- ===== REFERENCE POPUP ===== -->
+    <Teleport to="body">
+      <div class="ref-popup-overlay" v-if="showRefPopup" @click.self="showRefPopup = false">
+        <div class="ref-popup">
+          <div class="ref-popup-header">
+            <h3>Referenz wählen</h3>
+            <span class="ref-popup-track" v-if="store.currentSession?.track">{{ store.currentSession.track }}</span>
+            <button class="ref-popup-close" @click="showRefPopup = false">✕</button>
+          </div>
+
+          <div class="ref-popup-filters">
+            <div class="ref-popup-filter">
+              <label>Fahrer</label>
+              <select v-model="refPopupDriver" class="filter-select">
+                <option value="">Alle Fahrer</option>
+                <option v-for="d in refPopupDriverOptions" :key="d" :value="d">{{ d }}</option>
+              </select>
+            </div>
+            <div class="ref-popup-filter">
+              <label>Sortierung</label>
+              <select v-model="refPopupSort" class="filter-select">
+                <option value="time-asc">Bestzeit ↑</option>
+                <option value="date-desc">Datum ↓</option>
+                <option value="date-asc">Datum ↑</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="ref-popup-body">
+            <!-- Session list (left) -->
+            <div class="ref-popup-sessions">
+              <div
+                v-for="s in refPopupSessions" :key="s.filename"
+                class="ref-popup-card"
+                :class="{ active: refPopupSession?.filename === s.filename }"
+                @click="refPopupSelectSession(s)"
+              >
+                <div class="lm-badge-sm">LM</div>
+                <div class="ref-popup-card-info">
+                  <div class="ref-popup-card-track">{{ s.track || s.filename }}</div>
+                  <div class="ref-popup-card-car">{{ s.car || '—' }} <span class="ref-popup-card-driver" v-if="s.driver">· {{ s.driver }}</span></div>
+                  <div class="ref-popup-card-meta">
+                    <span class="mono">{{ fmtTimeSec(s.best_time) }}</span>
+                    <span>{{ s.lap_count }} laps</span>
+                    <span class="ref-popup-card-type" v-if="s.session_type" :style="{ color: TYPE_COLORS[s.session_type] || '#888' }">{{ s.session_type }}</span>
+                  </div>
+                </div>
+                <div class="ref-popup-card-date mono">{{ s.date }}</div>
+              </div>
+              <div class="ref-popup-empty" v-if="refPopupSessions.length === 0">Keine Sessions gefunden</div>
+            </div>
+
+            <!-- Lap list (right) -->
+            <div class="ref-popup-laps">
+              <div class="ref-popup-laps-header" v-if="refPopupSession">
+                <span class="ref-popup-laps-title">{{ refPopupSession.car || '—' }}</span>
+                <span class="ref-popup-laps-driver" v-if="refPopupSession.driver">{{ refPopupSession.driver }}</span>
+              </div>
+              <div class="ref-popup-laps-hint" v-if="!refPopupSession">← Session wählen</div>
+              <div class="ref-popup-laps-loading" v-if="refPopupLoading">Laden…</div>
+              <div class="ref-popup-lap-list" v-if="refPopupLaps.length">
+                <div
+                  v-for="l in refPopupLaps" :key="l.lap_number"
+                  class="ref-popup-lap-row"
+                  @click="refPopupSelectLap(l)"
+                >
+                  <span class="lap-num">{{ l.lap_number }}</span>
+                  <span class="lap-time mono">{{ formatTime(l.lap_time_ms) }}</span>
+                </div>
+              </div>
+              <div class="ref-popup-laps-empty" v-if="refPopupSession && !refPopupLoading && refPopupLaps.length === 0">Keine gültigen Runden</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -459,6 +644,11 @@ onMounted(() => {
 .track-name {
   font-size: 12px;
   color: var(--text-muted);
+}
+.layout-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 .session-date {
   font-size: 11px;
@@ -554,6 +744,203 @@ onMounted(() => {
 }
 .ref-select:focus { border-color: #c8ff00; }
 .ref-select optgroup { color: var(--text-muted); font-size: 11px; }
+
+/* Button to open ref popup */
+.btn-ref-popup {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-ref-popup:hover {
+  border-color: #c8ff00;
+  color: var(--text-primary);
+  background: rgba(200, 255, 0, 0.04);
+}
+
+/* Reference indicator card */
+.ref-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(249, 115, 22, 0.06);
+  border: 1px solid rgba(249, 115, 22, 0.2);
+  border-radius: 6px;
+}
+.ref-indicator-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #f97316;
+  flex-shrink: 0;
+}
+.ref-indicator-info {
+  display: flex; flex-direction: column; gap: 1px;
+}
+.ref-indicator-lap {
+  font-size: 12px; font-weight: 600;
+  color: var(--text-primary);
+}
+.ref-indicator-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ===== Reference Popup ===== */
+.ref-popup-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65);
+  z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.ref-popup {
+  width: 820px; max-width: 95vw;
+  max-height: 80vh;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.ref-popup-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.ref-popup-header h3 {
+  font-size: 16px; font-weight: 700; margin: 0;
+  color: var(--text-primary);
+}
+.ref-popup-track {
+  font-size: 12px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  flex: 1;
+}
+.ref-popup-close {
+  background: none; border: none;
+  color: var(--text-muted); font-size: 18px;
+  cursor: pointer; padding: 4px 8px;
+}
+.ref-popup-close:hover { color: var(--text-primary); }
+
+.ref-popup-filters {
+  display: flex; gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.ref-popup-filter {
+  display: flex; align-items: center; gap: 8px;
+}
+.ref-popup-filter label {
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); white-space: nowrap;
+}
+.ref-popup-filter .filter-select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 5px 8px; font-size: 12px;
+  border-radius: 5px; cursor: pointer; outline: none;
+}
+
+.ref-popup-body {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  flex: 1; min-height: 0;
+  overflow: hidden;
+}
+
+/* Session list in popup */
+.ref-popup-sessions {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+.ref-popup-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s;
+}
+.ref-popup-card:hover { background: var(--bg-tertiary); }
+.ref-popup-card.active {
+  background: rgba(59, 130, 246, 0.08);
+  border-left: 3px solid var(--accent-blue);
+}
+.ref-popup-card-info { flex: 1; min-width: 0; }
+.ref-popup-card-track {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+.ref-popup-card-car {
+  font-size: 11px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ref-popup-card-driver { color: var(--text-muted); }
+.ref-popup-card-meta {
+  display: flex; gap: 8px; align-items: center;
+  margin-top: 2px; font-size: 11px;
+  color: var(--text-muted);
+}
+.ref-popup-card-meta .mono { color: var(--text-primary); font-weight: 600; }
+.ref-popup-card-type { font-weight: 600; font-size: 10px; text-transform: uppercase; }
+.ref-popup-card-date { font-size: 10px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.ref-popup-empty {
+  padding: 30px; text-align: center;
+  font-size: 12px; color: var(--text-muted);
+}
+
+/* Lap list in popup */
+.ref-popup-laps {
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+}
+.ref-popup-laps-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 600;
+  color: var(--text-primary);
+}
+.ref-popup-laps-driver {
+  display: block; font-size: 11px;
+  color: var(--text-muted); font-weight: 400;
+}
+.ref-popup-laps-hint,
+.ref-popup-laps-loading,
+.ref-popup-laps-empty {
+  padding: 30px 14px;
+  text-align: center; font-size: 12px;
+  color: var(--text-muted);
+}
+.ref-popup-lap-list {
+  flex: 1; overflow-y: auto;
+}
+.ref-popup-lap-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+.ref-popup-lap-row:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+.ref-popup-lap-row .lap-num {
+  color: var(--text-secondary); font-weight: 600; width: 28px; font-size: 12px;
+}
+.ref-popup-lap-row .lap-time {
+  color: var(--text-primary); font-size: 13px; margin-left: auto;
+}
 
 /* Lap list */
 .panel-laps {

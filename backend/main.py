@@ -229,6 +229,7 @@ def list_sessions():
             session_id="",
             filename=i["filename"],
             track=i.get("track", ""),
+            layout=i.get("layout", ""),
             car=i.get("car", ""),
             car_class=i.get("car_class", ""),
             session_type=i.get("session_type", ""),
@@ -281,6 +282,7 @@ async def upload_session(file: UploadFile = File(...), driver: str = ""):
         session_id=sid,
         filename=safe_name,
         track=meta.get("track", ""),
+        layout=meta.get("layout", ""),
         car=meta.get("car", ""),
         car_class=meta.get("car_class", ""),
         session_type=meta.get("session_type", ""),
@@ -326,6 +328,7 @@ def load_session(filename: str, driver: str = ""):
         session_id=sid,
         filename=filename,
         track=meta.get("track", ""),
+        layout=meta.get("layout", ""),
         car=meta.get("car", ""),
         car_class=meta.get("car_class", ""),
         session_type=meta.get("session_type", ""),
@@ -711,6 +714,7 @@ def list_loaded_sessions():
             filename=sess.filename,
             driver=driver,
             track=meta.get("track", ""),
+            layout=meta.get("layout", ""),
             car=meta.get("car", ""),
             lap_count=len(laps),
         ))
@@ -840,19 +844,21 @@ def _generate_tips(
 
 
 @app.get("/api/compare/corners", response_model=CompareResponse)
-def compare_corners(track: Optional[str] = Query(None)):
+def compare_corners(track: Optional[str] = Query(None), layout: Optional[str] = Query(None)):
     """Cross-driver corner comparison for all loaded sessions on the same track.
 
     Uses each driver's fastest lap. Detects corners on the overall fastest
     lap, then extracts per-corner metrics from every driver and generates
     coaching tips.
     """
-    # Gather all sessions (optionally filtered by track)
+    # Gather all sessions (optionally filtered by track and layout)
     candidates: list[tuple[str, DuckDBSession, LapProcessor, str]] = []
     for sid, (sess, proc, driver) in _sessions.items():
         meta = sess.session_metadata()
         sess_track = meta.get("track", sess.filename)
         if track and sess_track.lower() != track.lower():
+            continue
+        if layout and meta.get("layout", "").lower() != layout.lower():
             continue
         candidates.append((sid, sess, proc, driver))
 
@@ -861,6 +867,7 @@ def compare_corners(track: Optional[str] = Query(None)):
 
     # Resolve effective track name from first match
     effective_track = candidates[0][1].session_metadata().get("track", "")
+    effective_layout = candidates[0][1].session_metadata().get("layout", "")
 
     # For each driver, find their fastest lap
     driver_best: dict[str, tuple[str, LapData]] = {}  # driver → (session_id, LapData)
@@ -913,6 +920,7 @@ def compare_corners(track: Optional[str] = Query(None)):
 
     return CompareResponse(
         track=effective_track,
+        layout=effective_layout,
         corners=comparisons,
         drivers=list(driver_best.keys()),
     )
@@ -923,12 +931,12 @@ def compare_corners(track: Optional[str] = Query(None)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/driver-bests")
-def get_driver_bests(track: str = Query(...)):
+def get_driver_bests(track: str = Query(...), layout: str = Query("")):
     """Return the best session per driver for a given track.
 
     Uses the session cache (background-scanned metadata) to find,
     for each unique driver, the session with the fastest best_time
-    on the requested track.
+    on the requested track.  Optionally filtered by layout.
     """
     _cache_ready.wait(timeout=15)
     with _cache_lock:
@@ -938,6 +946,8 @@ def get_driver_bests(track: str = Query(...)):
     for item in items:
         item_track = item.get("track", "")
         if item_track.lower() != track.lower():
+            continue
+        if layout and item.get("layout", "").lower() != layout.lower():
             continue
         driver = item.get("driver", "") or "Unknown"
         best = item.get("best_time", 0)
@@ -979,19 +989,23 @@ def delete_session_file(filename: str = Query(...)):
     if not resolved.is_file():
         raise HTTPException(404, f"File not found: {safe_name}")
 
+    # Close and remove any loaded sessions for this file first (releases file lock)
+    to_remove = [
+        sid for sid, (sess, _, _) in _sessions.items()
+        if os.path.basename(sess.filename) == safe_name
+    ]
+    for sid in to_remove:
+        try:
+            _sessions[sid][0].conn.close()
+        except Exception:
+            pass
+        del _sessions[sid]
+
     # Remove the file
     resolved.unlink()
 
     # Remove from cache
     with _cache_lock:
         _session_cache.pop(safe_name, None)
-
-    # Remove any loaded sessions for this file
-    to_remove = [
-        sid for sid, (sess, _, _) in _sessions.items()
-        if os.path.basename(sess.filename) == safe_name
-    ]
-    for sid in to_remove:
-        del _sessions[sid]
 
     return {"deleted": safe_name}

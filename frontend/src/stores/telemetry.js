@@ -154,12 +154,14 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     }
   }
 
-  async function fetchComparison(track = '') {
-    log('compare', `fetching… track=${track || 'all'}`)
+  async function fetchComparison(track = '', layout = '') {
+    log('compare', `fetching… track=${track || 'all'} layout=${layout || 'all'}`)
     error.value = null
     setProgress(10, 'Comparing drivers…')
     try {
-      const params = track ? { track } : {}
+      const params = {}
+      if (track) params.track = track
+      if (layout) params.layout = layout
       const { data } = await withRetry(() => axios.get('/api/compare/corners', { params }))
       comparison.value = data
       log('compare', `got ${data.corners?.length || 0} corners, ${data.drivers?.length || 0} drivers`)
@@ -276,7 +278,11 @@ export const useTelemetryStore = defineStore('telemetry', () => {
       log('activeLap', `got ${data.distance?.length || 0} telemetry points`)
 
       if (loading.value) setProgress(Math.max(loadingProgress.value, 75), 'Detecting corners…')
-      await _fetchCornersInternal(lapNumber)
+      // Only detect corners from active lap if no reference is set yet;
+      // when a reference exists, corners stay from the reference lap.
+      if (!refLap.value) {
+        await _fetchCornersInternal(lapNumber)
+      }
 
       // Recompute delta when active lap changes and ref is set
       if (refLap.value && refTelemetry.value) {
@@ -309,6 +315,8 @@ export const useTelemetryStore = defineStore('telemetry', () => {
         // Fallback to client-side
         if (activeTelemetry.value?.time?.length && refTelemetry.value?.time?.length) {
           delta.value = computeClientDelta(activeTelemetry.value, refTelemetry.value)
+        } else {
+          delta.value = computeClientDeltaFromSpeed(activeTelemetry.value, refTelemetry.value)
         }
       }
     }
@@ -348,7 +356,14 @@ export const useTelemetryStore = defineStore('telemetry', () => {
         if (activeTelemetry.value?.time?.length && telData.time?.length) {
           delta.value = computeClientDelta(activeTelemetry.value, telData)
         } else {
-          delta.value = null
+          delta.value = computeClientDeltaFromSpeed(activeTelemetry.value, telData)
+        }
+        // Detect corners from the fastest real lap for composite ref
+        const validLaps = laps.value.filter(l => l.valid !== false && l.lap_time_ms > 0)
+        const pool = validLaps.length > 0 ? validLaps : laps.value
+        if (pool.length > 0) {
+          const fastest = pool.reduce((b, l) => l.lap_time_ms < b.lap_time_ms ? l : b)
+          await _fetchCornersInternal(fastest.lap_number)
         }
       } else {
         refLap.value = laps.value.find(l => l.lap_number === lapNumber)
@@ -360,8 +375,10 @@ export const useTelemetryStore = defineStore('telemetry', () => {
         ])
         refTelemetry.value = telRes.data
         delta.value = deltaRes.data
+        // Re-detect corners from the reference lap
+        await _fetchCornersInternal(lapNumber)
       }
-      log('refLap', `got telemetry + delta`)
+      log('refLap', `got telemetry + delta + corners from ref`)
       if (!isNested) setProgress(100, 'Done')
     } catch (e) {
       log('refLap', 'ERROR', e.message)
@@ -391,7 +408,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
       refTelemetry.value = telData
 
       // Compute delta client-side from time arrays
-      if (!isNested) setProgress(70, 'Computing delta…')
+      if (!isNested) setProgress(60, 'Computing delta…')
       if (activeTelemetry.value?.time?.length && telData.time?.length) {
         delta.value = computeClientDelta(activeTelemetry.value, telData)
         log('crossRef', `computed client-side delta (${delta.value.distance.length} points)`)
@@ -400,6 +417,10 @@ export const useTelemetryStore = defineStore('telemetry', () => {
         delta.value = computeClientDeltaFromSpeed(activeTelemetry.value, telData)
         log('crossRef', `computed speed-based delta (${delta.value.distance.length} points)`)
       }
+
+      // Detect corners from the cross-session reference lap
+      if (!isNested) setProgress(80, 'Detecting corners…')
+      await _fetchCornersInternal(lapNumber, refSid)
 
       if (!isNested) setProgress(100, 'Done')
     } catch (e) {
@@ -441,12 +462,14 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     }
   }
 
-  async function fetchDriverBests(track) {
+  async function fetchDriverBests(track, layout = '') {
     if (!track) return
-    log('driverBests', `fetching for track=${track}…`)
+    log('driverBests', `fetching for track=${track} layout=${layout}…`)
     try {
+      const params = { track }
+      if (layout) params.layout = layout
       const { data } = await withRetry(() =>
-        axios.get('/api/driver-bests', { params: { track } })
+        axios.get('/api/driver-bests', { params })
       )
       driverBests.value = data
       log('driverBests', `got ${data.length} driver bests`)
@@ -521,11 +544,12 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   }
 
   // Internal — does NOT touch loading
-  async function _fetchCornersInternal(lapNumber) {
-    if (!sessionId.value) return
-    log('corners', `fetching for lap ${lapNumber}…`)
+  async function _fetchCornersInternal(lapNumber, sid = null) {
+    const id = sid || sessionId.value
+    if (!id) return
+    log('corners', `fetching for lap ${lapNumber} (session ${id})…`)
     try {
-      const { data } = await withRetry(() => axios.get(`/api/corners/${sessionId.value}`, {
+      const { data } = await withRetry(() => axios.get(`/api/corners/${id}`, {
         params: { lap_number: lapNumber },
       }))
       corners.value = data.corners

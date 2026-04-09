@@ -29,25 +29,37 @@ def _detect_corners_steering(
     steering: np.ndarray,
     steer_threshold: float = 0.03,
     gap_m: float = 50.0,
-    min_duration_m: float = 12.0,
-    max_apex_speed: float = 280.0,
+    min_duration_m: float = 30.0,
+    max_apex_speed: float = 310.0,
+    split_min_m: float = 40.0,
+    min_split_peak: float = 0.10,
 ) -> list[Corner]:
     """Detect corners from steering activity.
 
-    1. Find regions where ``|steering| > steer_threshold``.
-    2. Merge regions separated by less than *gap_m*.
-    3. For each region, find the speed minimum as apex.
-    4. Filter by minimum duration and apex speed.
+    1. Normalise steering if values exceed ±2 (degrees instead of ratio).
+    2. Find regions where ``|steering| > steer_threshold``.
+    3. Merge regions separated by less than *gap_m*.
+    4. Split merged regions at steering **sign changes** where both sides
+       have peak |steering| >= *min_split_peak* (chicane / S-curve detection).
+    5. For each region, find the speed minimum as apex.
+    6. Filter by minimum duration and apex speed.
     """
     if len(steering) < 3:
         return []
+
+    # Normalise steering when reported in degrees or other large-range units
+    steer = steering.copy()
+    steer_absmax = float(np.max(np.abs(steer)))
+    if steer_absmax > 2.0:
+        steer = steer / steer_absmax
 
     resolution = float(np.median(np.diff(distance))) if len(distance) > 1 else 1.0
     if resolution <= 0:
         resolution = 1.0
     gap_samples = max(int(gap_m / resolution), 1)
+    split_samples = max(int(split_min_m / resolution), 3)
 
-    turning = np.abs(steering) > steer_threshold
+    turning = np.abs(steer) > steer_threshold
     if not np.any(turning):
         return []
 
@@ -77,10 +89,69 @@ def _detect_corners_steering(
         else:
             merged.append((si, ei))
 
+    # Split merged regions at steering sign changes (chicane / S-curve detection)
+    split_regions: list[tuple[int, int]] = []
+    for si, ei in merged:
+        if ei - si < 2 * split_samples:
+            split_regions.append((si, ei))
+            continue
+
+        seg = steer[si : ei + 1]
+        # Build sign array, forward-filling zeros
+        signs = np.sign(seg)
+        for i in range(1, len(signs)):
+            if signs[i] == 0:
+                signs[i] = signs[i - 1]
+
+        # Find zero crossings
+        raw_crossings: list[int] = []
+        for i in range(1, len(signs)):
+            if signs[i] != 0 and signs[i - 1] != 0 and signs[i] != signs[i - 1]:
+                raw_crossings.append(si + i)
+
+        if not raw_crossings:
+            split_regions.append((si, ei))
+            continue
+
+        # Keep only crossings where both sides have significant peak steering
+        boundaries = [si] + raw_crossings + [ei + 1]
+        crossings: list[int] = []
+        for j, cx in enumerate(raw_crossings):
+            left_seg = steer[boundaries[j] : cx]
+            right_seg = steer[cx : boundaries[j + 2]]
+            if len(left_seg) > 0 and len(right_seg) > 0:
+                left_peak = float(np.max(np.abs(left_seg)))
+                right_peak = float(np.max(np.abs(right_seg)))
+                if left_peak >= min_split_peak and right_peak >= min_split_peak:
+                    crossings.append(cx)
+
+        if not crossings:
+            split_regions.append((si, ei))
+            continue
+
+        # Split at validated crossings, keeping only parts >= split_samples
+        parts: list[tuple[int, int]] = []
+        prev = si
+        for cx in crossings:
+            if cx - prev >= split_samples:
+                parts.append((prev, cx - 1))
+                prev = cx
+        # Remainder
+        if ei - prev >= split_samples:
+            parts.append((prev, ei))
+        elif parts:
+            # Merge too-short remainder into last part
+            parts[-1] = (parts[-1][0], ei)
+
+        if parts:
+            split_regions.extend(parts)
+        else:
+            split_regions.append((si, ei))
+
     # Build corners
     corners: list[Corner] = []
     idx = 1
-    for si, ei in merged:
+    for si, ei in split_regions:
         dur = float(distance[ei] - distance[si]) if ei > si else 0.0
         if dur < min_duration_m:
             continue
@@ -106,15 +177,14 @@ def _detect_corners_steering(
 def _detect_corners_speed(
     speed: np.ndarray,
     distance: np.ndarray,
-    window_m: float = 200.0,
+    window_m: float = 120.0,
     threshold_pct: float = 0.92,
-    max_apex_speed: float = 280.0,
-    min_duration_m: float = 12.0,
+    max_apex_speed: float = 310.0,
+    min_duration_m: float = 30.0,
 ) -> list[Corner]:
     """Detect corners from speed dips (fallback when steering unavailable).
 
-    Uses a wider rolling-average window and tighter threshold than the
-    original defaults to reliably detect corners on real data.
+    Uses a rolling-average window and threshold to find braking zones.
     """
     if len(speed) < 3 or len(distance) < 3:
         return []

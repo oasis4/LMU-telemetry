@@ -27,59 +27,104 @@ function getVisibleRange(telemetry) {
   }
 }
 
-// Build projection — zooms into distanceRange when set
+// Build projection — auto-rotates track to fill available space optimally
 function buildProjection(w, h, padding = 20) {
   const t = store.activeTelemetry
   if (!t?.lat?.length) return null
 
-  let latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity
-
-  // Determine which points to use for bounds
+  // Collect all points to consider (active + ref when shown)
   const range = getVisibleRange(t)
   const iStart = range ? range.start : 0
   const iEnd = range ? range.end : t.lat.length
 
+  let latMin = Infinity, latMax = -Infinity
   for (let i = iStart; i < iEnd; i++) {
-    const la = t.lat[i], lo = t.lon[i]
-    if (la < latMin) latMin = la
-    if (la > latMax) latMax = la
-    if (lo < lonMin) lonMin = lo
-    if (lo > lonMax) lonMax = lo
+    if (t.lat[i] < latMin) latMin = t.lat[i]
+    if (t.lat[i] > latMax) latMax = t.lat[i]
   }
-
-  // Also include ref telemetry bounds when showRef + zoomed
   if (props.showRef && store.refTelemetry?.lat?.length) {
-    const rRange = getVisibleRange(store.refTelemetry)
-    const rStart = rRange ? rRange.start : 0
-    const rEnd = rRange ? rRange.end : store.refTelemetry.lat.length
-    for (let i = rStart; i < rEnd; i++) {
-      const la = store.refTelemetry.lat[i], lo = store.refTelemetry.lon[i]
-      if (la < latMin) latMin = la
-      if (la > latMax) latMax = la
-      if (lo < lonMin) lonMin = lo
-      if (lo > lonMax) lonMax = lo
+    const rr = getVisibleRange(store.refTelemetry)
+    const rs = rr ? rr.start : 0
+    const re = rr ? rr.end : store.refTelemetry.lat.length
+    for (let i = rs; i < re; i++) {
+      if (store.refTelemetry.lat[i] < latMin) latMin = store.refTelemetry.lat[i]
+      if (store.refTelemetry.lat[i] > latMax) latMax = store.refTelemetry.lat[i]
     }
   }
 
   const midLat = (latMin + latMax) / 2
   const cosLat = Math.cos(midLat * Math.PI / 180)
 
-  const latRange = latMax - latMin || 1e-6
-  const lonRange = (lonMax - lonMin) * cosLat || 1e-6
+  // Project all points to flat x/y coordinates
+  const pts = []
+  for (let i = iStart; i < iEnd; i++) {
+    pts.push({ x: t.lon[i] * cosLat, y: t.lat[i] })
+  }
+  if (props.showRef && store.refTelemetry?.lat?.length) {
+    const rr = getVisibleRange(store.refTelemetry)
+    const rs = rr ? rr.start : 0
+    const re = rr ? rr.end : store.refTelemetry.lat.length
+    for (let i = rs; i < re; i++) {
+      pts.push({ x: store.refTelemetry.lon[i] * cosLat, y: store.refTelemetry.lat[i] })
+    }
+  }
+
+  // Compute centroid
+  let cx = 0, cy = 0
+  for (const p of pts) { cx += p.x; cy += p.y }
+  cx /= pts.length; cy /= pts.length
+
+  // Find optimal rotation via PCA (principal axis alignment)
+  let sxx = 0, sxy = 0, syy = 0
+  for (const p of pts) {
+    const dx = p.x - cx, dy = p.y - cy
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy
+  }
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy)
 
   const drawW = w - 2 * padding
   const drawH = h - 2 * padding
-  const scale = Math.min(drawW / lonRange, drawH / latRange)
 
-  const projW = lonRange * scale
-  const projH = latRange * scale
+  // Pick the rotation (theta or theta+90°) that maximizes the scale
+  function fitScale(angle) {
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
+    const c = Math.cos(angle), s = Math.sin(angle)
+    for (const p of pts) {
+      const dx = p.x - cx, dy = p.y - cy
+      const rx = dx * c - dy * s, ry = dx * s + dy * c
+      if (rx < xMin) xMin = rx; if (rx > xMax) xMax = rx
+      if (ry < yMin) yMin = ry; if (ry > yMax) yMax = ry
+    }
+    return Math.min(drawW / ((xMax - xMin) || 1e-6), drawH / ((yMax - yMin) || 1e-6))
+  }
+  const bestAngle = fitScale(theta + Math.PI / 2) > fitScale(theta)
+    ? theta + Math.PI / 2 : theta
+
+  // Compute final bounds with best rotation
+  const cosA = Math.cos(bestAngle), sinA = Math.sin(bestAngle)
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
+  for (const p of pts) {
+    const dx = p.x - cx, dy = p.y - cy
+    const rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA
+    if (rx < xMin) xMin = rx; if (rx > xMax) xMax = rx
+    if (ry < yMin) yMin = ry; if (ry > yMax) yMax = ry
+  }
+  const bboxW = (xMax - xMin) || 1e-6
+  const bboxH = (yMax - yMin) || 1e-6
+  const scale = Math.min(drawW / bboxW, drawH / bboxH)
+  const projW = bboxW * scale
+  const projH = bboxH * scale
   const offsetX = padding + (drawW - projW) / 2
   const offsetY = padding + (drawH - projH) / 2
 
   return {
     project(lon, lat) {
-      const x = offsetX + (lon - lonMin) * cosLat * scale
-      const y = offsetY + (latMax - lat) * scale
+      const px = lon * cosLat
+      const dx = px - cx, dy = lat - cy
+      const rx = dx * cosA - dy * sinA
+      const ry = dx * sinA + dy * cosA
+      const x = offsetX + (rx - xMin) * scale
+      const y = offsetY + (yMax - ry) * scale
       return { x, y }
     }
   }

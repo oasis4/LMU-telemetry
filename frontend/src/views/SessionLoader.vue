@@ -226,6 +226,7 @@ async function confirmDelete(s) {
           <!-- Info -->
           <div class="card-info">
             <div class="card-track">{{ s.track || s.filename }}</div>
+            <div class="card-layout" v-if="s.layout && s.layout !== s.track">{{ s.layout }}</div>
             <div class="card-car">{{ s.car || '—' }} <span class="card-driver" v-if="s.driver">· {{ s.driver }}</span></div>
             <div class="card-time">{{ fmtTime(s.best_time) }}</div>
             <div class="card-meta">
@@ -501,6 +502,14 @@ async function confirmDelete(s) {
   text-transform: uppercase;
   line-height: 1.3;
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-layout {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -13,6 +13,7 @@ class SessionInfo(BaseModel):
     session_id: str
     filename: str
     track: str = ""
+    layout: str = ""
     car: str = ""
     car_class: str = ""
     session_type: str = ""
@@ -128,6 +129,7 @@ class CornerComparison(BaseModel):
 
 class CompareResponse(BaseModel):
     track: str
+    layout: str = ""
     corners: list[CornerComparison]
     drivers: list[str]
 
@@ -138,6 +140,7 @@ class LoadedSessionInfo(BaseModel):
     filename: str
     driver: str
     track: str
+    layout: str = ""
     car: str
     lap_count: int
 
