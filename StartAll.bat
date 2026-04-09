@@ -3,18 +3,16 @@ setlocal
 cd /d "%~dp0"
 
 echo ======================================
-echo   LMU Telemetry - Unified Launcher
+echo   LMU Telemetry - Launcher
 echo ======================================
 echo.
 echo [1] Web Analyzer  (Browser UI - Backend + Frontend)
-echo [2] MoTeC Export   (DuckDB to MoTeC converter GUI)
-echo [3] Docker Start   (Web Analyzer via Docker Compose)
+echo [2] Docker Start   (Web Analyzer via Docker Compose)
 echo.
-set /p CHOICE="Select [1/2/3]: "
+set /p CHOICE="Select [1/2]: "
 
 if "%CHOICE%"=="1" goto WEB
-if "%CHOICE%"=="2" goto MOTEC
-if "%CHOICE%"=="3" goto DOCKER
+if "%CHOICE%"=="2" goto DOCKER
 echo Invalid choice.
 pause
 goto :eof
@@ -66,20 +64,6 @@ echo.
 echo Both servers started! Open http://localhost:5173 in your browser.
 echo Close terminal windows to stop.
 pause
-goto :eof
-
-:MOTEC
-echo.
-set VENV_PY=.venv\Scripts\python.exe
-set PY_CMD=python
-if exist "%VENV_PY%" set PY_CMD=%VENV_PY%
-%PY_CMD% telemetry_gui_oneclick.py
-if errorlevel 1 (
-    echo.
-    echo ERROR: Python not found or dependencies missing.
-    echo Run: pip install -r requirements.txt
-    pause
-)
 goto :eof
 
 :DOCKER

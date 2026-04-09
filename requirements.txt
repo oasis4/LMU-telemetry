@@ -1,8 +1,6 @@
 duckdb
 pandas
 numpy
-cantools
-matplotlib
 fastapi
 uvicorn[standard]
 scipy

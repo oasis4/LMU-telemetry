@@ -322,6 +322,7 @@ onMounted(() => {
         <div class="session-time">{{ formatTime(store.activeLap?.lap_time_ms) }}</div>
         <div class="session-deltas" v-if="totalDelta != null">
           <span :class="gapClass(totalDelta)">{{ formatDelta(totalDelta) }}</span>
+          <span class="delta-label">vs Ref</span>
         </div>
         <div class="session-car" v-if="store.currentSession">
           <span class="lm-badge-sm">LM</span>
@@ -346,12 +347,7 @@ onMounted(() => {
               <tr>
                 <td class="stat-label">Fastest Lap</td>
                 <td class="stat-value mono">{{ formatTime(store.fastestLap?.lap_time_ms) }}</td>
-                <td class="stat-diff mono" :class="gapClass(totalDelta)">{{ formatDelta(totalDelta) }}</td>
-              </tr>
-              <tr v-if="store.theoreticalBestMs">
-                <td class="stat-label">Best Possible</td>
-                <td class="stat-value mono">{{ formatTime(store.theoreticalBestMs) }}</td>
-                <td class="stat-diff"></td>
+                <td class="stat-diff mono" :class="gapClass(store.activeLap?.gap_to_best_ms)">{{ formatDelta(store.activeLap?.gap_to_best_ms) }}</td>
               </tr>
             </tbody>
           </table>
@@ -614,6 +610,15 @@ onMounted(() => {
   font-family: var(--font-mono);
   font-weight: 600;
   margin-top: 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.delta-label {
+  font-size: 11px;
+  font-weight: 400;
+  color: #888;
+  font-family: var(--font-sans, sans-serif);
 }
 .gap-red { color: #ef4444; }
 .gap-green { color: #22c55e; }

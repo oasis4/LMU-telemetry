@@ -1,104 +1,121 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/license-NonCommercial-orange?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
-  <a href="https://github.com/alelosbrigia/LMU-telemetry/releases"><img src="https://img.shields.io/github/v/release/alelosbrigia/LMU-telemetry?style=flat-square&color=c8ff00" alt="Release" /></a>
-  <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Platform" />
-</p>
+# LMU Telemetry
 
-<h1 align="center">🏎️ LMU Telemetry → MoTeC Converter</h1>
+![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black)
+![License](https://img.shields.io/badge/License-Non--Commercial-red)
 
-<p align="center">
-  <strong>Convert Le Mans Ultimate telemetry to MoTeC i2 &mdash; one click, zero hassle.</strong>
-</p>
-
-<p align="center">
-  <a href="https://ko-fi.com/alessandromanfredi"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi" /></a>
-</p>
+**Real-time telemetry analysis for Le Mans Ultimate.** Compare laps, analyse corners, find time — all in the browser.
 
 ---
 
-## ✨ Features
+## Features
 
-| Category | Details |
-|---|---|
-| **Import** | Direct import from LMU `.duckdb` telemetry files |
-| **Output** | Single unified MoTeC log (`*_CUSTOM.ld`) + CSV export |
-| **Channel Groups** | Driver / Inputs · Powertrain · Vehicle Dynamics · Aero & Suspension · Tyres · Track & Environment · States & Flags |
-| **Sampling** | Configurable frequency per group |
-| **Timeline** | Correct master timeline — no broken graphs |
-| **Naming** | Wheels: `FL / FR / RL / RR` · Sides: `_L / _R` · Tyre layers: `_I / _M / _O` |
-| **Units** | °C · bar · mm · km/h · rpm — consistent across all channels |
-| **GUI** | Simple one-click interface |
+- **Session Dashboard** — Speed, throttle & brake traces with interactive track map
+- **Lap Comparison** — Side-by-side overlay of any two laps (cross-session, cross-driver)
+- **Corner Analysis** — Per-corner breakdown with coaching tips (braking point, apex speed, throttle application)
+- **Delta Strip** — Visual time-gain/loss bar across the lap
+- **Reference Lap** — Pick any lap as reference and see the delta everywhere
+- **Auto-rotating Track Map** — PCA-based projection that fills available space
+- **One-Click Launcher** — `start.py` GUI to pick your telemetry folder and go
+
+## Screenshots
+
+> Add your own screenshots to `docs/screenshots/` and they will appear here.
+
+| Dashboard | Compare View |
+|-----------|-------------|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Compare](docs/screenshots/compare.png) |
 
 ---
 
-## 🖥️ Requirements
+## Quick Start
 
-- **Windows**
-- **Python 3.10+** (with Tkinter — included in the official installer)
+### Prerequisites
 
-### Quick install (recommended)
+- Python 3.10+
+- Node.js 18+
+- Le Mans Ultimate telemetry files (DuckDB format)
 
-```
-1.  Install Python 3.10+ and make sure it's in your PATH
-2.  Double-click  install_dependencies.bat   → creates venv & installs packages
-3.  Launch the GUI with  Start.bat
-```
-
-### Manual install
+### 1. Clone & install
 
 ```bash
+git clone https://github.com/your-user/LMU-telemetry.git
+cd LMU-telemetry
+
+# Backend
+python -m venv .venv
+.venv\Scripts\activate      # Windows
 pip install -r requirements.txt
+
+# Frontend
+cd frontend
+npm install
 ```
 
-> Tkinter ships with the official Windows Python distribution — no extra install needed.
+### 2. Run
 
----
+**Option A — One-click launcher (Windows)**
 
-## 🚀 Quick Start
-
-1. Clone or download this repository
-2. Make sure Python is available in your `PATH`
-3. Launch the GUI:
-   ```
-   Start.bat
-   ```
-4. Select an LMU `.duckdb` telemetry file
-5. Choose channel groups and sampling frequencies
-6. Click **RUN**
-
-### 📂 Output
-
-```
-Telemetry/
-  ├── <SessionName>_CUSTOM.ld        ← open in MoTeC i2
-  ├── <SessionName>_CUSTOM.csv
-  └── <SessionName>_CUSTOM.meta.csv
+```bash
+python start.py
 ```
 
+A small GUI opens where you pick your telemetry folder. Backend + frontend start automatically and the browser opens.
+
+**Option B — Manual**
+
+```bash
+# Terminal 1 — Backend
+set TELEMETRY_DIR=F:\path\to\Telemetry
+python -m uvicorn backend.main:app --port 8001
+
+# Terminal 2 — Frontend
+cd frontend
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173).
+
+**Option C — Docker**
+
+```bash
+docker compose up --build
+```
+
+Frontend at `http://localhost:3000`, API at `http://localhost:8001`.
+
 ---
 
-## 📊 MoTeC Output
+## Architecture
 
-- Single, coherent telemetry log
-- Channels already renamed and grouped
-- Beacon and LapTime generated automatically
-- Ready for overlays, histograms, and math channels
+```
+LMU-telemetry/
+├── backend/          FastAPI + DuckDB (read-only)
+│   ├── main.py       API routes
+│   ├── duckdb_reader.py  Telemetry data access
+│   ├── corner_detector.py  Corner detection (curvature-based)
+│   ├── delta_calc.py     Delta time calculation
+│   └── lap_processor.py  Lap data processing
+├── frontend/         Vue 3 + Vite + Pinia
+│   └── src/
+│       ├── views/    SessionDashboard, CompareView, CornerDetail, SessionLoader
+│       ├── components/  TrackMap, TelemetryChart, DeltaStrip, CoachingTip
+│       └── stores/   Pinia telemetry store
+├── start.py          One-click launcher GUI
+└── docker-compose.yml
+```
 
 ---
 
-## ⚠️ Disclaimer
+## License
 
-This project is **not affiliated** with Studio 397, Motorsport Games, or MoTeC Pty Ltd.  
-It is a community-driven, unofficial tool.
+Non-commercial use only. See [LICENSE](LICENSE).
 
----
+## Contributors
 
-## 📄 License
-
-Released under a **Non-Commercial License**.
-
-| | |
+See [CONTRIBUTORS.md](CONTRIBUTORS.md).
 |---|---|
 | ✅ Personal use | ✅ Educational use |
 | ✅ Community / sim-racing use | |
