@@ -148,15 +148,8 @@ Want to use this commercially? Contact the author first.
 - The **LMU sim racing community**
 - **MoTeC** for the analysis software
 - Everyone who tests and provides feedback
-- **ChatGPT** for the assist
+- **Claude** for the assist
 
 ---
-
-<p align="center">
-  <strong>💙 Support the Project</strong><br/>
-  This is a community-driven, non-commercial project.<br/>
-  If you find it useful, you can buy me a coffee ☕<br/><br/>
-  <a href="https://ko-fi.com/alessandromanfredi"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi" /></a>
-</p>
 
 
