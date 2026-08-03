@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmu-telemetry"
+version = "1.0.0.dev0"
+description = "Telemetry analysis for Le Mans Ultimate"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.5",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[tool.setuptools.packages.find]
+include = ["lmu_telemetry*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "corpus: test requires the full local telemetry corpus",
+]
