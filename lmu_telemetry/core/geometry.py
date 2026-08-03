@@ -56,3 +56,58 @@ def resample_to_grid(
     if np.any(np.diff(distance) < 0):
         raise ValueError("distance must be non-decreasing")
     return np.interp(grid_for(track_length_m, step_m), distance, values)
+
+
+#: Smoothing window for the racing line, in grid samples (15 x 2 m = 30 m).
+LINE_SMOOTH_WINDOW = 15
+#: Smoothing window applied to the curvature itself.
+CURVATURE_SMOOTH_WINDOW = 8
+
+
+def smooth_closed(values: np.ndarray, window: int) -> np.ndarray:
+    """Moving average that wraps around, because a lap is a closed loop.
+
+    Smoothing without wrap-around would leave an artefact at the start/finish
+    line, which is an arbitrary point on the track and not a feature of it.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    if window <= 1:
+        return values.copy()
+    if window >= len(values):
+        raise ValueError(f"window {window} exceeds series length {len(values)}")
+    kernel = np.ones(window) / window
+    padded = np.concatenate([values[-window:], values, values[:window]])
+    return np.convolve(padded, kernel, mode="same")[window:-window]
+
+
+def curvature(
+    x: np.ndarray, y: np.ndarray, step_m: float = GRID_STEP_M
+) -> np.ndarray:
+    """Signed curvature in 1/m. Positive turns left, negative turns right.
+
+    kappa = (x' y'' - y' x'') / (x'^2 + y'^2)^(3/2)
+
+    The line is smoothed first: GPS jitter differentiates into large spurious
+    curvature, and curvature needs two derivatives.
+    """
+    xs = smooth_closed(np.asarray(x, dtype=np.float64), LINE_SMOOTH_WINDOW)
+    ys = smooth_closed(np.asarray(y, dtype=np.float64), LINE_SMOOTH_WINDOW)
+    dx, dy = np.gradient(xs, step_m), np.gradient(ys, step_m)
+    ddx, ddy = np.gradient(dx, step_m), np.gradient(dy, step_m)
+    denominator = (dx**2 + dy**2) ** 1.5
+    kappa = np.where(
+        denominator > 1e-9,
+        (dx * ddy - dy * ddx) / np.maximum(denominator, 1e-9),
+        0.0,
+    )
+    return smooth_closed(kappa, CURVATURE_SMOOTH_WINDOW)
+
+
+def heading_change_deg(kappa: np.ndarray, grid: np.ndarray) -> float:
+    """Total change of heading over *grid*, in degrees.
+
+    Integrated over a whole lap this is the closure check: a lap that goes
+    round the circuit once and returns to its own start must come out near
+    360 degrees. A lap that does not is geometrically broken.
+    """
+    return float(np.degrees(abs(np.trapz(kappa, grid))))
