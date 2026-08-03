@@ -44,3 +44,13 @@ def test_cached_channel_cannot_be_mutated_by_a_caller(monza_q_file):
         a = s.file.channel("Lap Dist")
         with pytest.raises(ValueError):
             a[0] = 12345.0
+
+
+def test_last_lap_window_is_clamped_to_the_recording(monza_q_file):
+    """The final lap can end after the last sample; that must truncate, not raise."""
+    with Session.open(monza_q_file) as s:
+        last = s.laps[-1]
+        values = s.file.channel("Lap Dist")
+        dist = s.lap_channel(last, "Lap Dist")
+    assert len(dist) > 0
+    assert len(dist) <= len(values)

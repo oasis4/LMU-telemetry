@@ -111,11 +111,6 @@ class Session:
     def lap_channel(self, lap: Lap, name: str) -> np.ndarray:
         """The slice of *name* covering *lap*, in canonical units.
 
-        The channel carries no timestamps, so the lap's time window is mapped
-        onto sample indices via the channel's declared frequency.
+        Delegates to :meth:`TimeBase.channel_window` for the index mapping.
         """
-        spec = self._file.channels.require(name)
-        values = self._file.channel(name)
-        i0 = min(self._timebase.index_at(lap.t_start, spec.frequency_hz), len(values))
-        i1 = min(self._timebase.index_at(lap.t_end, spec.frequency_hz), len(values))
-        return values[i0:i1]
+        return self._timebase.channel_window(self._file, name, lap.t_start, lap.t_end)

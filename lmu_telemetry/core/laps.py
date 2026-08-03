@@ -57,13 +57,11 @@ def _distance_covered(tf, timebase: TimeBase, t_start: float, t_end: float) -> f
     ``Lap Dist`` is mandatory - it is present in every file of the corpus.
     Its absence means a broken file, so this raises ``MissingChannelError``
     rather than returning a substitute ``0.0``, which would be
-    indistinguishable from "the car did not move".
+    indistinguishable from "the car did not move". ``channel_window`` raises
+    that error itself via ``tf.channels.require``, so no explicit check is
+    needed here.
     """
-    spec = tf.channels.require("Lap Dist")
-    dist = tf.channel("Lap Dist")
-    i0 = min(timebase.index_at(t_start, spec.frequency_hz), len(dist))
-    i1 = min(timebase.index_at(t_end, spec.frequency_hz), len(dist))
-    segment = dist[i0:i1]
+    segment = timebase.channel_window(tf, "Lap Dist", t_start, t_end)
     if len(segment) < 2:
         return 0.0
     steps = np.diff(segment)
