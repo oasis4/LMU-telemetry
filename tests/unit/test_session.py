@@ -34,6 +34,7 @@ def test_every_corpus_session_reports_plausible_fastest_lap(corpus_files):
     Ranges are the known real-world envelope per track length, deliberately
     generous: the point is to catch fabricated times, not to grade driving.
     """
+    checked = 0
     for path in corpus_files:
         with Session.open(path) as s:
             fastest = s.fastest_lap
@@ -46,3 +47,5 @@ def test_every_corpus_session_reports_plausible_fastest_lap(corpus_files):
             f"{path.name}: {fastest.duration_s:.2f}s over {length:.0f}m "
             f"implies more than 300 km/h average"
         )
+        checked += 1
+    assert checked == 32, f"expected 32 sessions with a fastest lap, checked {checked}"

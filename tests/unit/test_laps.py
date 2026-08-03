@@ -69,6 +69,7 @@ def test_no_lap_in_the_corpus_is_physically_impossible(corpus_files):
     the duration comes from the game clock, so it cannot be fabricated.
     """
     max_speed_ms = 400.0 / 3.6
+    checked = 0
     for path in corpus_files:
         with TelemetryFile(path) as tf:
             laps = segment_laps(tf, TimeBase.from_file(tf))
@@ -79,6 +80,8 @@ def test_no_lap_in_the_corpus_is_physically_impossible(corpus_files):
                 f"{path.name} lap {lap.number}: {lap.duration_s:.2f}s "
                 f"is below the {floor:.2f}s physical floor"
             )
+            checked += 1
+    assert checked == 206, f"expected 206 complete laps in the corpus, checked {checked}"
 
 
 def test_missing_lap_dist_channel_raises_rather_than_returning_zero():

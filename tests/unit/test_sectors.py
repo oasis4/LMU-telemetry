@@ -49,4 +49,4 @@ def test_sector_sum_equals_lap_time_for_every_corpus_lap(corpus_files):
                 f"{path.name} lap {lap.number}"
             )
             checked += 1
-    assert checked >= 180, f"only {checked} laps had sector data"
+    assert checked == 190, f"expected 190 laps with sector data, checked {checked}"
