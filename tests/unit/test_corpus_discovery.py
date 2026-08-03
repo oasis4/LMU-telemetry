@@ -1,5 +1,9 @@
 """The corpus fixtures must find the real telemetry files, or skip cleanly."""
 
+import pytest
+
+pytestmark = pytest.mark.corpus
+
 
 def test_corpus_files_are_duckdb(corpus_files):
     assert len(corpus_files) >= 1
