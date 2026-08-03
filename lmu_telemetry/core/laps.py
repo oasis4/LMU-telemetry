@@ -51,10 +51,14 @@ def _touched_pits(tf, t_start: float, t_end: float) -> bool:
 
 
 def _distance_covered(tf, timebase: TimeBase, t_start: float, t_end: float) -> float:
-    """Metres covered in the interval, summing across any Lap Dist reset."""
-    spec = tf.channels.get("Lap Dist")
-    if spec is None:
-        return 0.0
+    """Metres covered in the interval, summing across any Lap Dist reset.
+
+    ``Lap Dist`` is mandatory - it is present in every file of the corpus.
+    Its absence means a broken file, so this raises ``MissingChannelError``
+    rather than returning a substitute ``0.0``, which would be
+    indistinguishable from "the car did not move".
+    """
+    spec = tf.channels.require("Lap Dist")
     dist = tf.channel("Lap Dist")
     i0 = min(timebase.index_at(t_start, spec.frequency_hz), len(dist))
     i1 = min(timebase.index_at(t_end, spec.frequency_hz), len(dist))
