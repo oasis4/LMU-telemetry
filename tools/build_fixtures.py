@@ -57,6 +57,13 @@ FIXTURES: list[tuple[str, str, float | None, str]] = [
         700.0,
         "12 Lap events but 13 Lap Dist resets - the case that broke the old code",
     ),
+    (
+        "Autodromo Enzo e Dino Ferrari_R_2026-04-04T18_46_34Z.duckdb",
+        "imola_r_unclosed_lap.duckdb",
+        500.0,
+        "its only complete racing lap closes at 406 deg, so the track "
+        "legitimately yields no reference model",
+    ),
 ]
 
 

@@ -60,3 +60,11 @@ def no_complete_lap_file() -> Path:
     if not path.is_file():
         pytest.skip("no-complete-lap fixture not built")
     return path
+
+
+@pytest.fixture(scope="session")
+def imola_unclosed_file() -> Path:
+    path = FIXTURE_DIR / "imola_r_unclosed_lap.duckdb"
+    if not path.is_file():
+        pytest.skip("imola fixture not built")
+    return path
