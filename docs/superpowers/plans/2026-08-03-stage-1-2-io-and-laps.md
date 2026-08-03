@@ -1443,6 +1443,7 @@ MAX_PLAUSIBLE_AVG_KMH = 300.0
 
 
 def test_sector_sum_equals_duration(corpus_files):
+    checked = 0
     for path in corpus_files:
         with Session.open(path) as s:
             for lap in s.laps:
@@ -1451,9 +1452,12 @@ def test_sector_sum_equals_duration(corpus_files):
                 assert sum(lap.sectors_s) == pytest.approx(lap.duration_s, abs=0.02), (
                     f"{path.name} lap {lap.number}"
                 )
+                checked += 1
+    assert checked == 190, f"expected 190 laps with sector data, checked {checked}"
 
 
 def test_no_lap_implies_impossible_average_speed(corpus_files):
+    checked = 0
     for path in corpus_files:
         with Session.open(path) as s:
             length = s.track_length_m
@@ -1464,6 +1468,8 @@ def test_no_lap_implies_impossible_average_speed(corpus_files):
                 assert avg_kmh < MAX_PLAUSIBLE_AVG_KMH, (
                     f"{path.name} lap {lap.number}: {avg_kmh:.1f} km/h average"
                 )
+                checked += 1
+    assert checked > 150, f"only {checked} full laps reached the speed check"
 
 
 def test_lap_intervals_are_contiguous_and_ordered(corpus_files):
@@ -1494,17 +1500,61 @@ Diese Tests prüfen bereits fertigen Code aus Task 5–7, sie müssen also sofor
 die Golden-Werte werden nicht an das Verhalten des Codes angepasst. Sie stammen direkt
 aus den `Lap`- und `Current Sector`-Events der Referenzdatei und sind die Vorgabe.
 
-- [ ] **Step 4: Run the whole suite**
+- [ ] **Step 4: Harden the corpus tests that can pass vacuously**
+
+Three corpus-wide tests from Tasks 5–7 iterate files and `continue` past cases they
+cannot judge. If the code under test broke such that *every* case were skipped, the
+loop body would never assert and the test would pass green. An invariant that can
+pass on an empty loop is not an invariant.
+
+Measured ground truth over the 40-file corpus:
+
+| Quantity | Exact value |
+|---|---|
+| Corpus files | 40 |
+| Complete laps | 206 |
+| Laps with sector data | 190 |
+| Sessions with a fastest lap | 32 |
+
+Add a counter to each of the three tests and assert the exact figure.
+
+In `tests/unit/test_laps.py`, in `test_no_lap_in_the_corpus_is_physically_impossible`,
+initialise `checked = 0` before the file loop, do `checked += 1` immediately after each
+`assert lap.duration_s >= floor`, and end the test with:
+
+```python
+    assert checked == 206, f"expected 206 complete laps in the corpus, checked {checked}"
+```
+
+In `tests/unit/test_sectors.py`, in `test_sector_sum_equals_lap_time_for_every_corpus_lap`,
+replace the final `assert checked >= 180, ...` with:
+
+```python
+    assert checked == 190, f"expected 190 laps with sector data, checked {checked}"
+```
+
+In `tests/unit/test_session.py`, in `test_every_corpus_session_reports_plausible_fastest_lap`,
+initialise `checked = 0` before the loop, do `checked += 1` immediately after the
+`assert fastest.duration_s > floor`, and end the test with:
+
+```python
+    assert checked == 32, f"expected 32 sessions with a fastest lap, checked {checked}"
+```
+
+These three numbers are facts about the current corpus. If a future corpus change moves
+them, the test tells you exactly what changed instead of silently covering less.
+
+- [ ] **Step 5: Run the whole suite**
 
 Run: `python -m pytest -v`
 Expected: PASS — alle Tests grün, keine Fehler
 
-- [ ] **Step 5: Verify the suite skips cleanly without the corpus**
+- [ ] **Step 6: Verify the suite skips cleanly without the corpus**
 
 Run: `python -m pytest -v -p no:cacheprovider --ignore=tests/golden --ignore=tests/invariants -k "not corpus"`
 Expected: PASS — die reinen Unit-Tests (Kanalregister, Zeitachse, Sektor-Mathematik) laufen ohne Telemetriedateien durch
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add tests/golden tests/invariants
