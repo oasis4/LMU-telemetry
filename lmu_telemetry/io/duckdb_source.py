@@ -30,6 +30,7 @@ class TelemetryFile:
         self._metadata: dict[str, str] | None = None
         self._channels: ChannelRegistry | None = None
         self._tables: set[str] | None = None
+        self._channel_cache: dict[str, np.ndarray] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -78,9 +79,19 @@ class TelemetryFile:
         return np.asarray(col, dtype=np.float64)
 
     def channel(self, name: str) -> np.ndarray:
-        """Channel values converted into canonical units."""
+        """Channel values converted into canonical units.
+
+        Cached and read-only: the same array is handed to every caller, so it
+        must not be writable - one caller mutating it would corrupt the next.
+        """
+        cached = self._channel_cache.get(name)
+        if cached is not None:
+            return cached
         spec = self.channels.require(name)
-        return normalise(self.raw_channel(name), spec)
+        values = normalise(self.raw_channel(name), spec)
+        values.flags.writeable = False
+        self._channel_cache[name] = values
+        return values
 
     def first_channel_value(self, name: str) -> float | None:
         """First sample of a channel, without materialising the whole array."""
