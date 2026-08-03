@@ -177,6 +177,20 @@ unsaubere sichtbar markiert mit Grund.
 
 Es gibt **keine** median- oder proportionsbasierte Verwerfung mehr.
 
+**Runde 0 ist nie eine Rundenzeit.** Während der Umsetzung von Stufe 1+2 gegen
+den Bestand gefunden: Runde 0 reicht vom Beginn der Aufzeichnung (Garage, Grid
+oder Formationsrunde) bis zur ersten gezeiteten Überfahrt. In 13 von 14
+Rennsessions deckt sie das **1,93- bis 2,00-fache der Streckenlänge** ab —
+Formationsrunde plus erste Rennrunde in einem einzigen `Lap`-Event-Fenster
+(Beispiel Monza: 11.176 m auf 5.778 m Strecke, 201,66 s, während das Spiel für
+die Rennrunde 125,52 s meldet). Der vierzehnte Fall ist ein Stehendstart mit
+37,9 s Standzeit im Grid bei etwa einer Streckenlänge.
+
+Die hergeleitete Dauer ist für das `Lap`-Event-Fenster jeweils korrekt — Runde 0
+ist nur keine Runde im Rennsinn. Sie darf im UI nie als Rundenzeit erscheinen.
+Ab Runde 1 stimmt jede hergeleitete Dauer mit dem `Lap Time`-Event des Spiels
+über alle 40 Sessions auf **18,3 ms** überein (145 Runden, null Abweichungen).
+
 ### 3.3 Referenzmodell der Strecke
 
 Identität einer Strecke: `(TrackName, TrackLayout, round(Streckenlänge, -1))`.
