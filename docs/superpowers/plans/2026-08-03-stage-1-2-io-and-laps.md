@@ -1790,7 +1790,38 @@ def no_complete_lap_file() -> Path:
     return path
 ```
 
-- [ ] **Step 5: Write tests that exercise the edge-case fixtures**
+- [ ] **Step 5: Retire the now-obsolete corpus assertion from Task 1**
+
+Task 1 created `tests/unit/test_corpus_discovery.py`, whose
+`test_monza_reference_file_exists` asserts that `monza_q_file` is named after the
+**corpus** session. From this task onward `monza_q_file` resolves to the committed
+fixture `monza_q_3laps.duckdb`, so that assertion no longer describes the contract.
+
+Replace the whole of `tests/unit/test_corpus_discovery.py` with:
+
+```python
+"""The corpus fixtures must find the real telemetry files, or skip cleanly."""
+
+import pytest
+
+
+@pytest.mark.corpus
+def test_corpus_files_are_duckdb(corpus_files):
+    assert len(corpus_files) >= 1
+    assert all(f.suffix == ".duckdb" for f in corpus_files)
+
+
+def test_reference_session_resolves_to_a_readable_file(monza_q_file):
+    """Resolves to the committed fixture, or the corpus original as a fallback."""
+    assert monza_q_file.is_file()
+    assert monza_q_file.suffix == ".duckdb"
+```
+
+Note the marker moved from module level to `test_corpus_files_are_duckdb` alone:
+the reference-session test no longer needs the corpus, and must stay selected
+under `pytest -m "not corpus"`.
+
+- [ ] **Step 6: Write tests that exercise the edge-case fixtures**
 
 Create `tests/unit/test_fixture_edge_cases.py`:
 
@@ -1841,17 +1872,17 @@ def test_extra_distance_reset_does_not_create_a_phantom_lap(fixture_dir):
         assert lap.duration_s > 60.0, "no partial lap may be reported as a full one"
 ```
 
-- [ ] **Step 6: Run the suite without the corpus**
+- [ ] **Step 7: Run the suite without the corpus**
 
 Run: `python -m pytest -v -m "not corpus"`
 Expected: PASS — die Unit-, Fixture- und Edge-Case-Tests laufen alle durch, ohne dass der 637-MB-Bestand vorhanden sein muss
 
-- [ ] **Step 7: Run the full suite**
+- [ ] **Step 8: Run the full suite**
 
 Run: `python -m pytest -v`
 Expected: PASS — alle Tests grün
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add tools/build_fixtures.py tests/fixtures tests/conftest.py tests/unit/test_fixture_edge_cases.py .gitignore
