@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .sectors import sector_times
 from .timebase import TimeBase
 
 
@@ -77,6 +78,7 @@ def segment_laps(tf, timebase: TimeBase) -> list[Lap]:
     ts, numbers = events
     if len(ts) < 2:
         return []
+    sector_events = tf.events("Current Sector")
 
     laps: list[Lap] = []
     for i in range(len(ts) - 1):
@@ -88,7 +90,7 @@ def segment_laps(tf, timebase: TimeBase) -> list[Lap]:
                 t_start=t_start,
                 t_end=t_end,
                 duration_s=t_end - t_start,
-                sectors_s=None,
+                sectors_s=sector_times(sector_events, t_start, t_end),
                 touched_pits=_touched_pits(tf, t_start, t_end),
                 distance_m=_distance_covered(tf, timebase, t_start, t_end),
             )
