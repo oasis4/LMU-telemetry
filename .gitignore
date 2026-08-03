@@ -7,4 +7,7 @@ dist/
 .venv/
 data/
 *.duckdb
+*.duckdb.wal
+LMU Data*/
 .telemetry_config.json
+.cache/
