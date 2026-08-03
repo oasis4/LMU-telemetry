@@ -4,7 +4,10 @@ import pytest
 from lmu_telemetry.io.channels import MissingChannelError
 from lmu_telemetry.io.duckdb_source import TelemetryFile
 
-pytestmark = pytest.mark.corpus
+
+def test_opening_a_missing_file_raises_file_not_found_error():
+    with pytest.raises(FileNotFoundError):
+        TelemetryFile("does_not_exist.duckdb")
 
 
 def test_metadata_has_the_twelve_known_keys(monza_q_file):
@@ -63,6 +66,7 @@ def test_unknown_channel_raises(monza_q_file):
             tf.channel("No Such Channel")
 
 
+@pytest.mark.corpus
 def test_every_corpus_file_opens_and_reports_metadata(corpus_files):
     for path in corpus_files:
         with TelemetryFile(path) as tf:

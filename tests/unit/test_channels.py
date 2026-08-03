@@ -47,7 +47,6 @@ def test_normalise_does_not_mutate_input():
     assert values[0] == 100.0
 
 
-@pytest.mark.corpus
 def test_registry_reads_real_channel_list(monza_q_file):
     import duckdb
 
@@ -67,7 +66,6 @@ def test_registry_reads_real_channel_list(monza_q_file):
     assert len(reg.names()) == 56
 
 
-@pytest.mark.corpus
 def test_require_raises_for_unknown_channel(monza_q_file):
     import duckdb
 

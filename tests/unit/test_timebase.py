@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -15,6 +17,25 @@ def test_axis_rejects_non_positive_frequency():
     tb = TimeBase(t0=0.0)
     with pytest.raises(ValueError):
         tb.axis(n_samples=10, frequency_hz=0)
+    with pytest.raises(ValueError):
+        tb.axis(n_samples=10, frequency_hz=-10)
+
+
+class _EmptyGpsTimeFile:
+    """Stub exposing just enough of TelemetryFile for TimeBase.from_file."""
+
+    path = Path("stub.duckdb")
+
+    def channel(self, name: str) -> np.ndarray:
+        return np.array([])
+
+    def first_channel_value(self, name: str):
+        return None
+
+
+def test_from_file_rejects_an_empty_gps_time_channel():
+    with pytest.raises(ValueError):
+        TimeBase.from_file(_EmptyGpsTimeFile())
 
 
 def test_index_at_rounds_to_nearest_sample():
@@ -25,7 +46,6 @@ def test_index_at_rounds_to_nearest_sample():
     assert tb.index_at(0.0, 10) == 0  # clamped, never negative
 
 
-@pytest.mark.corpus
 def test_axis_from_real_file_matches_gps_time_start(monza_q_file):
     with TelemetryFile(monza_q_file) as tf:
         tb = TimeBase.from_file(tf)
@@ -36,7 +56,6 @@ def test_axis_from_real_file_matches_gps_time_start(monza_q_file):
     assert axis[0] == pytest.approx(gps[0])
 
 
-@pytest.mark.corpus
 def test_lap_dist_resets_land_on_lap_events(monza_q_file):
     """The hard external check: a Lap Dist reset marks a lap start, so it must
     coincide with a Lap event to within one 10 Hz sample."""

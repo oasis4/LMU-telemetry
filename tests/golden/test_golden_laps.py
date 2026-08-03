@@ -7,17 +7,14 @@ import pytest
 
 from lmu_telemetry.core.session import Session
 
-pytestmark = pytest.mark.corpus
-
 GOLDEN = json.loads((Path(__file__).parent / "expected_laps.json").read_text())
 
 
 @pytest.mark.parametrize("filename", sorted(GOLDEN))
-def test_golden_session(corpus_dir, filename):
+def test_golden_session(fixture_dir, filename):
     expected = GOLDEN[filename]
-    path = corpus_dir / filename
-    if not path.is_file():
-        pytest.skip(f"{filename} not present")
+    path = fixture_dir / filename
+    assert path.is_file(), f"golden fixture missing: {path}"
 
     with Session.open(path) as s:
         info = s.info

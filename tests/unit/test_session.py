@@ -2,8 +2,6 @@ import pytest
 
 from lmu_telemetry.core.session import Session
 
-pytestmark = pytest.mark.corpus
-
 
 def test_info_is_read_from_metadata(monza_q_file):
     with Session.open(monza_q_file) as s:
@@ -20,6 +18,13 @@ def test_track_length_is_the_maximum_lap_distance(monza_q_file):
         assert s.track_length_m == pytest.approx(5776.08, abs=0.1)
 
 
+def test_no_track_length_without_a_complete_lap(no_complete_lap_file):
+    """160 m of an abandoned out-lap is not the length of Monza."""
+    with Session.open(no_complete_lap_file) as s:
+        assert s.laps == []
+        assert s.track_length_m is None
+
+
 def test_fastest_lap_excludes_the_out_lap(monza_q_file):
     with Session.open(monza_q_file) as s:
         fastest = s.fastest_lap
@@ -28,6 +33,7 @@ def test_fastest_lap_excludes_the_out_lap(monza_q_file):
     assert fastest.duration_s == pytest.approx(111.000)
 
 
+@pytest.mark.corpus
 def test_every_corpus_session_reports_plausible_fastest_lap(corpus_files):
     """Nothing in the corpus may look like a world record.
 

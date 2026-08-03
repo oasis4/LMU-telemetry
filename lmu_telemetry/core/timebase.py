@@ -27,10 +27,10 @@ class TimeBase:
 
     @classmethod
     def from_file(cls, tf) -> "TimeBase":
-        gps = tf.channel("GPS Time")
-        if len(gps) == 0:
+        t0 = tf.first_channel_value("GPS Time")
+        if t0 is None:
             raise ValueError(f"{tf.path.name}: GPS Time channel is empty")
-        return cls(t0=float(gps[0]))
+        return cls(t0=float(t0))
 
     def axis(self, n_samples: int, frequency_hz: int) -> np.ndarray:
         """Timestamps for *n_samples* consecutive samples at *frequency_hz*."""

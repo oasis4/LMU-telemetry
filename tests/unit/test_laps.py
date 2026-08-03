@@ -13,20 +13,17 @@ def _laps(path):
         return segment_laps(tf, TimeBase.from_file(tf))
 
 
-@pytest.mark.corpus
 def test_monza_qualifying_has_exactly_three_complete_laps(monza_q_file):
     laps = _laps(monza_q_file)
     assert [l.number for l in laps] == [0, 1, 2]
 
 
-@pytest.mark.corpus
 def test_lap_durations_come_from_lap_event_timestamps(monza_q_file):
     """Ground truth: Lap events at 12.575 / 143.66 / 260.22 / 371.22."""
     laps = _laps(monza_q_file)
     assert [round(l.duration_s, 3) for l in laps] == [131.085, 116.560, 111.000]
 
 
-@pytest.mark.corpus
 def test_trailing_incomplete_lap_is_dropped(monza_q_file):
     """The file has 4 Lap events, so only 3 laps are bounded on both sides."""
     with TelemetryFile(monza_q_file) as tf:
@@ -36,7 +33,6 @@ def test_trailing_incomplete_lap_is_dropped(monza_q_file):
     assert len(laps) == 3
 
 
-@pytest.mark.corpus
 def test_out_lap_is_flagged_as_having_touched_the_pits(monza_q_file):
     """In Pits goes 1 -> 0 at t=31.96, inside lap 0."""
     laps = _laps(monza_q_file)
@@ -45,7 +41,6 @@ def test_out_lap_is_flagged_as_having_touched_the_pits(monza_q_file):
     assert laps[2].touched_pits is False
 
 
-@pytest.mark.corpus
 def test_distance_covered_is_about_one_track_length(monza_q_file):
     laps = _laps(monza_q_file)
     for lap in laps[1:]:  # the out lap starts in the pit lane

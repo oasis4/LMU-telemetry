@@ -32,6 +32,8 @@ def test_no_lap_implies_impossible_average_speed(corpus_files):
     for path in corpus_files:
         with Session.open(path) as s:
             length = s.track_length_m
+            if length is None:
+                continue
             for lap in s.laps:
                 if lap.distance_m < length * 0.5:
                     continue  # partial lap, not a timing claim
@@ -59,3 +61,36 @@ def test_every_session_reports_a_track_and_layout(corpus_files):
         with Session.open(path) as s:
             assert s.info.track, f"{path.name}"
             assert s.info.layout, f"{path.name}"
+
+
+def test_derived_duration_matches_the_games_own_lap_time_event(corpus_files):
+    """The strongest available check: the file records its own lap time.
+
+    `Lap Time` fires at lap completion carrying the just-completed lap's
+    duration. We never read it to derive anything - which is exactly why it
+    makes an independent oracle for the durations we do derive.
+    """
+    checked = 0
+    for path in corpus_files:
+        with Session.open(path) as s:
+            events = s.file.events("Lap Time")
+            if events is None:
+                continue
+            ev_ts, ev_val = events
+            for lap in s.laps:
+                # the event fires at this lap's end
+                hits = [
+                    float(v)
+                    for t, v in zip(ev_ts, ev_val)
+                    if abs(float(t) - lap.t_end) < 0.5 and float(v) > 0
+                ]
+                if len(hits) != 1:
+                    continue
+                assert hits[0] == pytest.approx(lap.duration_s, abs=0.05), (
+                    f"{path.name} lap {lap.number}: derived {lap.duration_s:.3f}s "
+                    f"but the file records {hits[0]:.3f}s"
+                )
+                checked += 1
+    assert checked >= 100, (
+        f"only {checked} laps could be cross-checked against a Lap Time event"
+    )

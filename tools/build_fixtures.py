@@ -87,7 +87,8 @@ def build(source: Path, dest: Path, keep_seconds: float | None) -> None:
                 con.execute(f'CREATE TABLE "{table}" AS SELECT * FROM src."{table}"')
 
         # Blank the setup blob: 38 kB of JSON that nothing reads.
-        con.execute("UPDATE metadata SET value = '{}' WHERE key = 'CarSetup'")
+        if _table_exists(con, "metadata"):
+            con.execute("UPDATE metadata SET value = '{}' WHERE key = 'CarSetup'")
 
         t0_row = con.execute('SELECT value FROM src."GPS Time" LIMIT 1').fetchone()
         t0 = float(t0_row[0]) if t0_row else 0.0

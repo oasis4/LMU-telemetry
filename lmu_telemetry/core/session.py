@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..io.channels import MissingChannelError
 from ..io.duckdb_source import TelemetryFile
 from .laps import Lap, segment_laps
 from .timebase import TimeBase
@@ -28,9 +29,14 @@ class Session:
 
     def __init__(self, file: TelemetryFile) -> None:
         self._file = file
-        self._timebase = TimeBase.from_file(file)
+        try:
+            self._timebase = TimeBase.from_file(file)
+        except Exception:
+            file.close()
+            raise
         self._laps: list[Lap] | None = None
         self._track_length: float | None = None
+        self._track_length_computed = False
 
     @classmethod
     def open(cls, path: str | Path) -> Session:
@@ -73,13 +79,24 @@ class Session:
         return self._laps
 
     @property
-    def track_length_m(self) -> float:
-        if self._track_length is None:
+    def track_length_m(self) -> float | None:
+        """Track length, taken as the maximum ``Lap Dist`` over the session.
+
+        Returns ``None`` when the session has no complete lap - a track length
+        cannot be established from a session that never completed one (an
+        abandoned out-lap of a few hundred metres is not the length of the
+        track). Raises :class:`MissingChannelError` when the ``Lap Dist``
+        channel itself is absent.
+        """
+        if not self._track_length_computed:
             if "Lap Dist" not in self._file.channels:
-                self._track_length = 0.0
+                raise MissingChannelError("Lap Dist")
+            if not self.laps:
+                self._track_length = None
             else:
                 dist = self._file.channel("Lap Dist")
-                self._track_length = float(dist.max()) if len(dist) else 0.0
+                self._track_length = float(dist.max()) if len(dist) else None
+            self._track_length_computed = True
         return self._track_length
 
     @property

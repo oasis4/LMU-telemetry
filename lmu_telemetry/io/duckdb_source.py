@@ -82,6 +82,16 @@ class TelemetryFile:
         spec = self.channels.require(name)
         return normalise(self.raw_channel(name), spec)
 
+    def first_channel_value(self, name: str) -> float | None:
+        """First sample of a channel, without materialising the whole array."""
+        spec = self.channels.require(name)
+        if name not in self.tables:
+            raise MissingChannelError(name)
+        row = self._con.execute(f'SELECT value FROM "{name}" LIMIT 1').fetchone()
+        if row is None:
+            return None
+        return float(normalise(np.array([row[0]], dtype=np.float64), spec)[0])
+
     def has_event(self, name: str) -> bool:
         if name not in self.tables:
             return False

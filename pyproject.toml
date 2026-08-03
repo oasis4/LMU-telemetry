@@ -20,7 +20,7 @@ include = ["lmu_telemetry*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --strict-markers"
 markers = [
     "corpus: test requires the full local telemetry corpus",
 ]

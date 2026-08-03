@@ -1,5 +1,5 @@
 {
-  "Autodromo Nazionale Monza_Q_2026-03-28T17_02_56Z.duckdb": {
+  "monza_q_3laps.duckdb": {
     "track": "Autodromo Nazionale Monza",
     "car_class": "GT3",
     "track_length_m": 5776.08,
