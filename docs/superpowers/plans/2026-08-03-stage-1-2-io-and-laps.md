@@ -1443,6 +1443,7 @@ MAX_PLAUSIBLE_AVG_KMH = 300.0
 
 
 def test_sector_sum_equals_duration(corpus_files):
+    checked = 0
     for path in corpus_files:
         with Session.open(path) as s:
             for lap in s.laps:
@@ -1451,9 +1452,12 @@ def test_sector_sum_equals_duration(corpus_files):
                 assert sum(lap.sectors_s) == pytest.approx(lap.duration_s, abs=0.02), (
                     f"{path.name} lap {lap.number}"
                 )
+                checked += 1
+    assert checked == 190, f"expected 190 laps with sector data, checked {checked}"
 
 
 def test_no_lap_implies_impossible_average_speed(corpus_files):
+    checked = 0
     for path in corpus_files:
         with Session.open(path) as s:
             length = s.track_length_m
@@ -1464,6 +1468,8 @@ def test_no_lap_implies_impossible_average_speed(corpus_files):
                 assert avg_kmh < MAX_PLAUSIBLE_AVG_KMH, (
                     f"{path.name} lap {lap.number}: {avg_kmh:.1f} km/h average"
                 )
+                checked += 1
+    assert checked > 150, f"only {checked} full laps reached the speed check"
 
 
 def test_lap_intervals_are_contiguous_and_ordered(corpus_files):
@@ -1494,17 +1500,61 @@ Diese Tests prüfen bereits fertigen Code aus Task 5–7, sie müssen also sofor
 die Golden-Werte werden nicht an das Verhalten des Codes angepasst. Sie stammen direkt
 aus den `Lap`- und `Current Sector`-Events der Referenzdatei und sind die Vorgabe.
 
-- [ ] **Step 4: Run the whole suite**
+- [ ] **Step 4: Harden the corpus tests that can pass vacuously**
+
+Three corpus-wide tests from Tasks 5–7 iterate files and `continue` past cases they
+cannot judge. If the code under test broke such that *every* case were skipped, the
+loop body would never assert and the test would pass green. An invariant that can
+pass on an empty loop is not an invariant.
+
+Measured ground truth over the 40-file corpus:
+
+| Quantity | Exact value |
+|---|---|
+| Corpus files | 40 |
+| Complete laps | 206 |
+| Laps with sector data | 190 |
+| Sessions with a fastest lap | 32 |
+
+Add a counter to each of the three tests and assert the exact figure.
+
+In `tests/unit/test_laps.py`, in `test_no_lap_in_the_corpus_is_physically_impossible`,
+initialise `checked = 0` before the file loop, do `checked += 1` immediately after each
+`assert lap.duration_s >= floor`, and end the test with:
+
+```python
+    assert checked == 206, f"expected 206 complete laps in the corpus, checked {checked}"
+```
+
+In `tests/unit/test_sectors.py`, in `test_sector_sum_equals_lap_time_for_every_corpus_lap`,
+replace the final `assert checked >= 180, ...` with:
+
+```python
+    assert checked == 190, f"expected 190 laps with sector data, checked {checked}"
+```
+
+In `tests/unit/test_session.py`, in `test_every_corpus_session_reports_plausible_fastest_lap`,
+initialise `checked = 0` before the loop, do `checked += 1` immediately after the
+`assert fastest.duration_s > floor`, and end the test with:
+
+```python
+    assert checked == 32, f"expected 32 sessions with a fastest lap, checked {checked}"
+```
+
+These three numbers are facts about the current corpus. If a future corpus change moves
+them, the test tells you exactly what changed instead of silently covering less.
+
+- [ ] **Step 5: Run the whole suite**
 
 Run: `python -m pytest -v`
 Expected: PASS — alle Tests grün, keine Fehler
 
-- [ ] **Step 5: Verify the suite skips cleanly without the corpus**
+- [ ] **Step 6: Verify the suite skips cleanly without the corpus**
 
 Run: `python -m pytest -v -p no:cacheprovider --ignore=tests/golden --ignore=tests/invariants -k "not corpus"`
 Expected: PASS — die reinen Unit-Tests (Kanalregister, Zeitachse, Sektor-Mathematik) laufen ohne Telemetriedateien durch
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add tests/golden tests/invariants
@@ -1790,7 +1840,38 @@ def no_complete_lap_file() -> Path:
     return path
 ```
 
-- [ ] **Step 5: Write tests that exercise the edge-case fixtures**
+- [ ] **Step 5: Retire the now-obsolete corpus assertion from Task 1**
+
+Task 1 created `tests/unit/test_corpus_discovery.py`, whose
+`test_monza_reference_file_exists` asserts that `monza_q_file` is named after the
+**corpus** session. From this task onward `monza_q_file` resolves to the committed
+fixture `monza_q_3laps.duckdb`, so that assertion no longer describes the contract.
+
+Replace the whole of `tests/unit/test_corpus_discovery.py` with:
+
+```python
+"""The corpus fixtures must find the real telemetry files, or skip cleanly."""
+
+import pytest
+
+
+@pytest.mark.corpus
+def test_corpus_files_are_duckdb(corpus_files):
+    assert len(corpus_files) >= 1
+    assert all(f.suffix == ".duckdb" for f in corpus_files)
+
+
+def test_reference_session_resolves_to_a_readable_file(monza_q_file):
+    """Resolves to the committed fixture, or the corpus original as a fallback."""
+    assert monza_q_file.is_file()
+    assert monza_q_file.suffix == ".duckdb"
+```
+
+Note the marker moved from module level to `test_corpus_files_are_duckdb` alone:
+the reference-session test no longer needs the corpus, and must stay selected
+under `pytest -m "not corpus"`.
+
+- [ ] **Step 6: Write tests that exercise the edge-case fixtures**
 
 Create `tests/unit/test_fixture_edge_cases.py`:
 
@@ -1841,17 +1922,17 @@ def test_extra_distance_reset_does_not_create_a_phantom_lap(fixture_dir):
         assert lap.duration_s > 60.0, "no partial lap may be reported as a full one"
 ```
 
-- [ ] **Step 6: Run the suite without the corpus**
+- [ ] **Step 7: Run the suite without the corpus**
 
 Run: `python -m pytest -v -m "not corpus"`
 Expected: PASS — die Unit-, Fixture- und Edge-Case-Tests laufen alle durch, ohne dass der 637-MB-Bestand vorhanden sein muss
 
-- [ ] **Step 7: Run the full suite**
+- [ ] **Step 8: Run the full suite**
 
 Run: `python -m pytest -v`
 Expected: PASS — alle Tests grün
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add tools/build_fixtures.py tests/fixtures tests/conftest.py tests/unit/test_fixture_edge_cases.py .gitignore

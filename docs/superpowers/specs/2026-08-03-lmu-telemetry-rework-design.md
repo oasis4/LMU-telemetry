@@ -177,6 +177,20 @@ unsaubere sichtbar markiert mit Grund.
 
 Es gibt **keine** median- oder proportionsbasierte Verwerfung mehr.
 
+**Runde 0 ist nie eine Rundenzeit.** Während der Umsetzung von Stufe 1+2 gegen
+den Bestand gefunden: Runde 0 reicht vom Beginn der Aufzeichnung (Garage, Grid
+oder Formationsrunde) bis zur ersten gezeiteten Überfahrt. In 13 von 14
+Rennsessions deckt sie das **1,93- bis 2,00-fache der Streckenlänge** ab —
+Formationsrunde plus erste Rennrunde in einem einzigen `Lap`-Event-Fenster
+(Beispiel Monza: 11.176 m auf 5.778 m Strecke, 201,66 s, während das Spiel für
+die Rennrunde 125,52 s meldet). Der vierzehnte Fall ist ein Stehendstart mit
+37,9 s Standzeit im Grid bei etwa einer Streckenlänge.
+
+Die hergeleitete Dauer ist für das `Lap`-Event-Fenster jeweils korrekt — Runde 0
+ist nur keine Runde im Rennsinn. Sie darf im UI nie als Rundenzeit erscheinen.
+Ab Runde 1 stimmt jede hergeleitete Dauer mit dem `Lap Time`-Event des Spiels
+über alle 40 Sessions auf **18,3 ms** überein (145 Runden, null Abweichungen).
+
 ### 3.3 Referenzmodell der Strecke
 
 Identität einer Strecke: `(TrackName, TrackLayout, round(Streckenlänge, -1))`.
@@ -213,14 +227,37 @@ beiden Lesmo, T8–T10 die Ascari-Schikane, T11 mit 167° die Parabolica.
 Le Mans ebenso: T14 mit R = 30 m die Mulsanne-Haarnadel, T18–T21 die
 Porsche-Kurven, T22–T25 die Ford-Schikanen.
 
-**Zwei bekannte Lücken, die die Umsetzung schließen muss:**
+**Stand nach der Vorabuntersuchung für Stufe 3** (auf der fertigen Stufe-1+2-API
+gegen alle sauberen Runden gemessen):
 
-- *Algarve findet 10 statt 15 Kurven.* Sequenzen mit 278° bzw. 241°
-  Richtungsänderung sind zusammengeklebte Mehrfachkurven. Schritt 6 (Split)
-  behebt das und wird gegen Algarve = 15 verifiziert.
-- *Imola liefert kein Modell*, weil beide vorhandenen Runden Unfallrunden sind.
-  Fallback: beste vorhandene Runde verwenden und im UI als unsicher kennzeichnen.
-  Ein Modell wird nie stillschweigend aus schlechten Daten gebaut.
+- *Der Split-Schritt braucht ein anderes Kriterium als ursprünglich gedacht.*
+  Ein prominenzbasierter Split auf Krümmungsspitzen zerlegt Monzas **Curva
+  Grande** (zwei flache Hälften mit R ≈ 270 m und 290 m) fälschlich in zwei
+  Kurven. Das richtige Kriterium ist die **gesamte Richtungsänderung**: nur
+  Blöcke über ~180° kommen als verschmolzen in Frage. Damit liefert Monza
+  **stabil 11 Kurven über jede getestete Parameterkombination**, und Monzas
+  Parabolica (165°) sowie Algarves Haarnadel (176°) bleiben zu Recht ganz.
+
+- *Kurvenanzahl ist eine Namenskonvention, keine physikalische Größe.*
+  Das ursprüngliche Abnahmekriterium „Algarve = 15" war falsch gestellt.
+  Der Detektor findet dort 14 geometrisch unterscheidbare Bögen. Der
+  Unterschied ist ein einzelner Abschnitt bei 3302–3590 m, der 190° dreht:
+  sein Radiusverlauf geht glatt von 392 m auf 45 m am Scheitel und wieder auf
+  378 m — ein Peak, monoton hinein und hinaus, ohne jeden Einbruch dazwischen.
+  Das ist ein Hufeisen mit abnehmendem Radius, also **eine** Kurve, die die
+  offizielle Streckenkarte als zwei Turns zählt.
+
+  **Korrigiertes Abnahmekriterium:** die Geometrie muss stabil und
+  reproduzierbar sein, nicht eine offizielle Zahl treffen. Die Zuordnung
+  offizieller Turn-Nummern auf geometrische Bögen ist Aufgabe der kuratierten
+  Namenstabelle (`data/tracks/*.json`) — ein Namenseintrag darf mehrere Turns
+  auf einen Bogen abbilden. Der Detektor erfindet keine Grenze, die in der
+  Geometrie nicht vorhanden ist.
+
+- *Imola bleibt dünn.* Mit der sauberen Rundenklassifikation aus Stufe 1+2
+  liefert es jetzt eine brauchbare Runde statt keiner. Ein aus einer einzigen
+  Runde gebautes Modell wird im UI als unsicher gekennzeichnet. Ein Modell wird
+  nie stillschweigend aus schlechten Daten gebaut.
 
 ### 3.4 Auswertung
 
@@ -328,5 +365,6 @@ Launcher (überarbeitet).
 
 - Kurvennamen liegen zunächst für die vier belegten Strecken vor; weitere
   Strecken fallen automatisch auf T1…Tn zurück.
-- Der Split-Schwellwert für lange Kurvensequenzen wird gegen Algarve kalibriert
-  und muss anschließend Monza (11) und Le Mans unverändert lassen.
+- Der Split-Schwellwert wird über die gesamte Richtungsänderung eines Blocks
+  gesteuert (~180°), nicht über Krümmungsprominenz. Verifiziert: Monza bleibt
+  dabei über jede getestete Parameterkombination bei 11 Kurven.
