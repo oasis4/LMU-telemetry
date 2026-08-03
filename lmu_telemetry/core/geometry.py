@@ -110,4 +110,6 @@ def heading_change_deg(kappa: np.ndarray, grid: np.ndarray) -> float:
     round the circuit once and returns to its own start must come out near
     360 degrees. A lap that does not is geometrically broken.
     """
+    if len(kappa) != len(grid):
+        raise ValueError(f"kappa and grid differ in length: {len(kappa)} vs {len(grid)}")
     return float(np.degrees(abs(np.trapz(kappa, grid))))
