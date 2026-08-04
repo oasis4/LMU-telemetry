@@ -83,6 +83,30 @@ def test_a_lap_where_lap_dist_steps_backwards_still_advances_in_time(
     assert np.all(np.diff(trace.time_s) > 0.0)
 
 
+def test_the_next_laps_distance_reset_does_not_reject_this_lap(zero_winding_file):
+    """Lap 1 is 119.60 s long and Lap Dist resets 119.50 s into it.
+
+    Both crossings that bound a lap can land inside its window, because the
+    boundary is an event timestamp while the channel is sampled at 10 Hz. The
+    closing reset belongs to the next lap. Treating it as a mid-lap reset cost
+    140 of the working set's 426 clean laps - a third of them - and the loss
+    was invisible until a comparison asked for one of them.
+    """
+    with Session.open(zero_winding_file) as s:
+        lap = next(l for l in s.laps if l.number == 1)
+        length = s.track_length_m
+        raw = np.asarray(s.lap_channel(lap, "Lap Dist"), dtype=float)
+        hz = s.file.channels.require("Lap Dist").frequency_hz
+        trace = build_trace(s, lap, length)
+
+    resets = np.flatnonzero(np.diff(raw) < -0.5 * length)
+    late = [float((i + 1) / hz) for i in resets if (i + 1) / hz > 2.0]
+    assert late, "this fixture no longer has a trailing reset, so it proves nothing"
+    assert late[0] > lap.duration_s - 1.0, "the reset must be at the very end"
+    assert np.all(np.diff(trace.time_s) > 0.0)
+    assert trace.time_s[-1] == pytest.approx(lap.duration_s, abs=1.0)
+
+
 def test_a_channel_the_file_does_not_carry_is_an_error_not_a_zero(monza_q_file):
     """A substitute array is indistinguishable from a lap spent stationary."""
     with Session.open(monza_q_file) as s:

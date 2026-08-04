@@ -93,16 +93,26 @@ def _progress(session, lap: Lap, track_length_m: float):
     hz = session.file.channels.require("Lap Dist").frequency_hz
     elapsed = np.arange(len(distance), dtype=np.float64) / hz
 
+    # A lap is bounded by two crossings of the start/finish line, and Lap Dist
+    # resets at a crossing. Both of them can fall inside the window, because
+    # the boundary is an event timestamp while the channel is sampled at
+    # 10 Hz: the opening reset lands just after the window starts and the
+    # closing one just before it ends. Both belong to the neighbours.
+    #
+    # Rejecting a lap for the closing reset cost 140 of the working set's 426
+    # clean laps - a third of them - so the window is trimmed to the samples
+    # between the two instead. Whether what remains is still a whole lap is
+    # not decided here: resample_to_grid refuses samples that do not span the
+    # track, and that guard is the one that has to hold anyway.
     resets = np.flatnonzero(np.diff(distance) < -0.5 * track_length_m)
-    if len(resets):
-        late = resets[elapsed[resets + 1] > RESET_GRACE_S]
-        if len(late):
-            raise TraceError(
-                f"lap {lap.number}: Lap Dist resets {len(late)} time(s) mid-lap, "
-                f"first at {elapsed[late[0] + 1]:.1f} s - this is not one lap"
-            )
-        start = int(resets[-1]) + 1
+    opening = resets[elapsed[resets + 1] <= RESET_GRACE_S]
+    if len(opening):
+        start = int(opening[-1]) + 1
         distance, elapsed = distance[start:], elapsed[start:] - elapsed[start]
+        resets = np.flatnonzero(np.diff(distance) < -0.5 * track_length_m)
+    if len(resets):
+        end = int(resets[0]) + 1
+        distance, elapsed = distance[:end], elapsed[:end]
 
     distance = np.maximum.accumulate(distance)
     # Keep the first time each distance is reached: a stall contributes no new
