@@ -15,7 +15,10 @@ from __future__ import annotations
 import numpy as np
 
 from .corners import Corner
+from .geometry import span_indices
 from .trace import LapTrace
+
+__all__ = ["delta_s", "span_indices", "time_lost_over"]
 
 
 def delta_s(reference: LapTrace, other: LapTrace) -> np.ndarray:
@@ -32,22 +35,6 @@ def delta_s(reference: LapTrace, other: LapTrace) -> np.ndarray:
     return np.asarray(other.time_s, dtype=np.float64) - np.asarray(
         reference.time_s, dtype=np.float64
     )
-
-
-def span_indices(grid: np.ndarray, start_m: float, end_m: float) -> np.ndarray:
-    """Grid indices covered by ``[start_m, end_m]``, wrapping if it wraps.
-
-    A corner that contains the start/finish line has ``start_m > end_m`` - see
-    :class:`corners.Corner`. Treating that as an empty range would silently
-    drop one corner from every comparison on a circuit that has one.
-    """
-    start = int(np.searchsorted(grid, float(start_m), side="left"))
-    end = int(np.searchsorted(grid, float(end_m), side="right"))
-    start = min(max(start, 0), len(grid) - 1)
-    end = min(max(end, 1), len(grid))
-    if start_m <= end_m:
-        return np.arange(start, max(end, start + 1))
-    return np.concatenate([np.arange(start, len(grid)), np.arange(0, end)])
 
 
 def time_lost_over(delta: np.ndarray, grid: np.ndarray, corner: Corner) -> float:

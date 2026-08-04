@@ -104,6 +104,23 @@ def resample_to_grid(
     return np.interp(grid, distance, values)
 
 
+def span_indices(grid: np.ndarray, start_m: float, end_m: float) -> np.ndarray:
+    """Grid indices covered by ``[start_m, end_m]``, wrapping if it wraps.
+
+    A span with ``start_m > end_m`` runs off the end of the lap and back to
+    the beginning - which is how a corner containing the start/finish line is
+    reported. Read as an ordinary range it is empty, and such a corner then
+    vanishes from every measurement without anything saying so.
+    """
+    start = int(np.searchsorted(grid, float(start_m), side="left"))
+    end = int(np.searchsorted(grid, float(end_m), side="right"))
+    start = min(max(start, 0), len(grid) - 1)
+    end = min(max(end, 1), len(grid))
+    if start_m <= end_m:
+        return np.arange(start, max(end, start + 1))
+    return np.concatenate([np.arange(start, len(grid)), np.arange(0, end)])
+
+
 #: Smoothing window for the racing line, in grid samples (15 x 2 m = 30 m).
 LINE_SMOOTH_WINDOW = 15
 #: Smoothing window applied to the curvature itself.
