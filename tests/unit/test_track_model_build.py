@@ -101,15 +101,68 @@ def test_loading_an_absent_model_returns_none(monza_q_file, tmp_path):
     assert load_model(key, tmp_path) is None
 
 
-def test_model_can_be_built_from_several_sessions_of_one_track(monza_q_file):
-    """The whole point of the model: many sessions, one shared corner list."""
-    with Session.open(monza_q_file) as a, Session.open(monza_q_file) as b:
+def test_model_can_be_built_from_several_sessions_of_one_track(
+    monza_q_file, fixture_dir
+):
+    """The whole point of the model: many sessions, one shared corner list.
+
+    The two sessions must be genuinely different recordings. Opening one file
+    twice makes the median across sessions the identity, so such a test
+    cannot tell a correctly merged model from one whose laps never shared a
+    coordinate frame - which is exactly the failure worth catching here.
+    """
+    monza_r = fixture_dir / "monza_r_extra_dist_reset.duckdb"
+    with Session.open(monza_q_file) as a, Session.open(monza_r) as b:
+        assert a.file.path != b.file.path
         both = build_track_model([a, b])
-        single = build_track_model([a])
+        first = build_track_model([a])
+        second = build_track_model([b])
+
     assert both is not None
-    assert both.lap_count == single.lap_count * 2
-    assert both.key == single.key
-    assert [c.name for c in both.corners] == [c.name for c in single.corners]
+    assert both.key == first.key == second.key
+    assert both.lap_count == first.lap_count + second.lap_count
+    assert first.lap_count > 0 and second.lap_count > 0
+
+    # A merged model is one corner list, not the concatenation of two.
+    assert len(both.corners) == len(first.corners) == len(second.corners)
+    # Every corner of the merged model sits between what the two sessions
+    # measured on their own, which it cannot do if the laps of one session
+    # were shifted into a frame of their own before the median.
+    for merged, a_c, b_c in zip(both.corners, first.corners, second.corners):
+        assert min(a_c.apex_m, b_c.apex_m) - 60.0 <= merged.apex_m
+        assert merged.apex_m <= max(a_c.apex_m, b_c.apex_m) + 60.0
+
+
+def test_a_built_model_is_named_without_the_caller_applying_names(
+    monza_q_file, fixture_dir
+):
+    """Task 8's deliverable has to be reachable from production code.
+
+    build_track_model, not its callers, applies the curated names - otherwise
+    save_model persists T1..Tn and every consumer of a cached model sees the
+    generic names.
+    """
+    monza_r = fixture_dir / "monza_r_extra_dist_reset.duckdb"
+    with Session.open(monza_q_file) as a, Session.open(monza_r) as b:
+        model = build_track_model([a, b])
+
+    names = [c.name for c in model.corners]
+    assert "Curva Parabolica" in names
+    assert names[0] == "Variante del Rettifilo 1"
+    assert not any(n.startswith("T") and n[1:].isdigit() for n in names)
+
+
+def test_a_cached_model_comes_back_named(monza_q_file, fixture_dir, tmp_path):
+    """A named model must survive the cache, or the cache un-names it."""
+    monza_r = fixture_dir / "monza_r_extra_dist_reset.duckdb"
+    with Session.open(monza_q_file) as a, Session.open(monza_r) as b:
+        model = build_track_model([a, b])
+    save_model(model, tmp_path)
+    again = load_model(model.key, tmp_path)
+
+    assert again is not None
+    assert [c.name for c in again.corners] == [c.name for c in model.corners]
+    assert "Curva Parabolica" in [c.name for c in again.corners]
 
 
 def test_sessions_from_different_tracks_are_rejected(monza_q_file, imola_unclosed_file):

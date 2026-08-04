@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from lmu_telemetry.core.naming import apply_names
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import TrackKey, build_track_model
 
@@ -62,8 +61,12 @@ def test_track_model_matches_the_frozen_reference(models, track):
         f"got {len(model.corners)} at {[round(c.apex_m) for c in model.corners]}"
     )
 
-    named = apply_names(model.corners, track)
-    for corner, apex, name in zip(named, expected["apex_m"], expected["names"]):
+    # The model's own names, not names this test applied: build_track_model
+    # is what has to produce a named model, since that is what save_model
+    # persists and load_model serves.
+    for corner, apex, name in zip(
+        model.corners, expected["apex_m"], expected["names"]
+    ):
         assert corner.apex_m == pytest.approx(apex, abs=APEX_TOLERANCE_M), (
             f"{track} {name}: apex moved from {apex} to {corner.apex_m:.0f} m"
         )

@@ -18,6 +18,7 @@ import numpy as np
 
 from . import geometry
 from .corners import Corner, detect_corners
+from .naming import apply_names
 from .quality import clean_laps, lap_line_on_grid
 
 
@@ -247,7 +248,12 @@ def build_track_model(sessions) -> "TrackModel | None":
     grid = geometry.grid_for(track_length)
     kappa = geometry.curvature(x, y)
     closure = geometry.heading_change_deg(kappa, grid)
-    corners = detect_corners(kappa, grid)
+    # Named here rather than by the caller. A model that leaves
+    # build_track_model as T1..Tn is persisted that way by save_model and
+    # comes back that way from load_model, so a curated name applied
+    # afterwards would exist only in whichever caller remembered to apply it.
+    # Naming is part of what a TrackModel *is*, so it happens once, here.
+    corners = apply_names(detect_corners(kappa, grid), key.track)
 
     confident = len(lines) >= MIN_CONFIDENT_LAPS
     warning = None
