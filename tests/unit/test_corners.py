@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from lmu_telemetry.core.corners import MERGE_GAP_M, detect_corners
+from lmu_telemetry.core.corners import (
+    CORNER_MIN_HEADING_DEG,
+    MERGE_GAP_M,
+    detect_corners,
+)
 from lmu_telemetry.core.geometry import (
     GRID_STEP_M,
     curvature,
@@ -68,7 +72,13 @@ def test_corners_are_numbered_in_track_order():
     corners = detect_corners(curvature(x, y), grid)
     assert [c.index for c in corners] == [1, 2]
     assert [c.name for c in corners] == ["T1", "T2"]
-    assert corners[0].start_m < corners[1].start_m
+    # The oval's second bend ends exactly at the lap length, so smoothing
+    # carries it a sample past the start/finish line: it is a corner that
+    # contains d=0, and therefore the corner the lap starts in.
+    assert corners[0].wraps
+    assert not corners[1].wraps
+    assert corners[0].end_m <= corners[1].start_m
+    assert corners[1].start_m < corners[1].end_m
 
 
 def test_direction_follows_the_sign_of_curvature():
@@ -198,6 +208,102 @@ def test_opposite_signed_bends_never_merge():
     corners = detect_corners(k, grid)
     assert len(corners) == 2
     assert {c.direction for c in corners} == {"L", "R"}
+
+
+# --- the start/finish line ----------------------------------------------------
+#
+# d=0 is an arbitrary point on the track, not a feature of it - the same
+# reasoning that makes geometry.smooth_closed wrap. A corner may therefore
+# contain it, and must come out as the same corner it would be anywhere else
+# on the lap. Every track in the corpus happens to start on a straight, so
+# only synthetic curvature can exercise this.
+
+
+def _wrapped_and_middle(width_before: int, width_after: int, kappa_value: float):
+    """The same bend twice: once straddling d=0, once in the middle of the lap.
+
+    Both get exactly ``width_before + width_after`` samples of identical
+    curvature, so every measurement over them must agree.
+    """
+    grid = grid_for(1000.0)
+    n = len(grid)
+    wrapped = np.zeros_like(grid)
+    wrapped[n - width_before :] = kappa_value
+    wrapped[:width_after] = kappa_value
+
+    middle = np.zeros_like(grid)
+    middle[200 : 200 + width_before + width_after] = kappa_value
+    return wrapped, middle, grid
+
+
+def test_a_corner_straddling_the_start_finish_line_is_one_corner():
+    """Scanned linearly this bend is cut in half by an arbitrary line."""
+    wrapped, middle, grid = _wrapped_and_middle(20, 30, 1.0 / 60.0)
+
+    mid_corners = detect_corners(middle, grid)
+    wrap_corners = detect_corners(wrapped, grid)
+
+    assert len(mid_corners) == 1
+    assert len(wrap_corners) == 1
+    a, b = wrap_corners[0], mid_corners[0]
+    assert a.heading_deg == pytest.approx(b.heading_deg, abs=0.5)
+    assert a.radius_m == pytest.approx(b.radius_m, rel=0.01)
+    assert a.direction == b.direction
+    # A corner that contains d=0 runs off the end of the lap and back to the
+    # start, so it is the one case where start_m sits after end_m.
+    assert a.start_m > a.end_m
+
+
+def test_a_short_corner_straddling_the_start_finish_line_does_not_vanish():
+    """Both halves fall under CORNER_MIN_LENGTH_M, so a linear scan drops
+    the corner entirely - and silently, which is the worse failure."""
+    wrapped, middle, grid = _wrapped_and_middle(10, 10, 1.0 / 50.0)
+
+    assert len(detect_corners(middle, grid)) == 1
+    corners = detect_corners(wrapped, grid)
+    assert len(corners) == 1
+    assert corners[0].heading_deg > CORNER_MIN_HEADING_DEG
+
+
+def test_a_wrapping_corner_is_measured_over_the_whole_joined_region():
+    """Not over whichever half happens to be longer."""
+    wrapped, middle, grid = _wrapped_and_middle(20, 30, 1.0 / 60.0)
+    wrapped[-10:] = 1.0 / 25.0  # the tightest point sits before d=0
+
+    corner = detect_corners(wrapped, grid)[0]
+    assert corner.radius_m == pytest.approx(25.0, rel=0.05)
+    assert corner.apex_m > 900.0  # apex found in the pre-d=0 half
+    assert corner.start_m > corner.end_m
+
+
+def test_opposite_signed_bends_across_the_start_finish_line_stay_separate():
+    """Joining is for one corner cut in half, not for two adjacent corners."""
+    grid = grid_for(1000.0)
+    k = np.zeros_like(grid)
+    k[-25:] = 1.0 / 60.0
+    k[:25] = -1.0 / 60.0
+
+    corners = detect_corners(k, grid)
+    assert len(corners) == 2
+    assert {c.direction for c in corners} == {"L", "R"}
+
+
+def test_a_wrapping_corner_is_first_and_corners_stay_in_track_order():
+    """A corner containing d=0 is the lap's first corner; the ordering
+    guarantee detect_corners makes must survive it."""
+    grid = grid_for(1000.0)
+    k = np.zeros_like(grid)
+    k[-20:] = 1.0 / 60.0
+    k[:30] = 1.0 / 60.0     # wraps d=0
+    k[200:250] = 1.0 / 60.0
+    k[350:400] = 1.0 / 60.0
+
+    corners = detect_corners(k, grid)
+    assert [c.index for c in corners] == [1, 2, 3]
+    assert [c.name for c in corners] == ["T1", "T2", "T3"]
+    assert corners[0].start_m > corners[0].end_m       # the wrapping one
+    assert corners[0].end_m <= corners[1].start_m
+    assert corners[1].end_m <= corners[2].start_m
 
 
 # --- _split recursion ---------------------------------------------------------

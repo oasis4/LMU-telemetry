@@ -32,15 +32,29 @@ def test_at_least_three_tracks_produced_a_model(models):
 
 
 def test_corners_are_ordered_and_do_not_overlap(models):
+    """Each corner ends before the next begins.
+
+    A corner containing the start/finish line is listed first and ends before
+    the second one starts, so the same comparison holds for it - only its own
+    start_m sits after its end_m, on the far side of the line.
+    """
     for model in models:
         for a, b in zip(model.corners, model.corners[1:]):
             assert a.end_m <= b.start_m, f"{model.key.track}: {a.name} overlaps {b.name}"
+        # At most one corner can contain the line, and it must be the first.
+        wrapping = [c for c in model.corners if c.wraps]
+        assert wrapping in ([], [model.corners[0]]), model.key.track
 
 
 def test_every_apex_lies_inside_its_own_corner(models):
     for model in models:
         for c in model.corners:
-            assert c.start_m <= c.apex_m <= c.end_m, f"{model.key.track} {c.name}"
+            if c.wraps:
+                assert c.apex_m >= c.start_m or c.apex_m <= c.end_m, (
+                    f"{model.key.track} {c.name}"
+                )
+            else:
+                assert c.start_m <= c.apex_m <= c.end_m, f"{model.key.track} {c.name}"
 
 
 def test_every_corner_stays_within_the_track(models):
