@@ -7,6 +7,8 @@ from lmu_telemetry.core.geometry import (
     grid_for,
     heading_change_deg,
     smooth_closed,
+    turn_rad,
+    winding_number,
 )
 
 
@@ -33,8 +35,40 @@ def test_curvature_scales_inversely_with_radius():
 
 
 def test_a_closed_circle_turns_exactly_360_degrees():
-    x, y, grid = _circle(200.0)
-    assert heading_change_deg(curvature(x, y), grid) == pytest.approx(360.0, abs=5.0)
+    x, y, _ = _circle(200.0)
+    assert heading_change_deg(turn_rad(x, y)) == pytest.approx(360.0, abs=1e-9)
+
+
+def test_heading_comes_from_the_tangent_not_from_integrating_curvature():
+    """The same circle, sampled so that smoothing visibly cuts its corners.
+
+    Integrating curvature over the distance grid measures the curvature of the
+    *smoothed* line but weights it by *unsmoothed* distance, so it reads high
+    by however much the smoothing shortened the line - and how much that is
+    depends on how tightly the line turns, which is why no single circuit
+    exposes it. A 15 m radius circle reads 424 degrees that way; on the corpus
+    the same effect put COTA National at 437 and Monza at 361. The tangent
+    estimator returns exactly 360 at every radius below.
+    """
+    for radius, integrated_at_least in ((15.0, 400.0), (20.0, 385.0), (25.0, 375.0)):
+        x, y, grid = _circle(radius)
+        integrated = float(np.degrees(abs(np.trapz(curvature(x, y), grid))))
+        assert integrated > integrated_at_least, f"radius {radius} m"
+        assert heading_change_deg(turn_rad(x, y)) == pytest.approx(360.0, abs=1e-9)
+
+
+def test_curvature_and_turning_agree_about_how_far_the_line_turned():
+    """kappa * ds and the turning array must integrate to the same angle.
+
+    They are derived from one primitive precisely so this holds. If curvature
+    were computed independently - from second derivatives, say - the two could
+    drift apart, and a corner's radius and its heading would then describe
+    slightly different corners.
+    """
+    x, y, _ = _circle(120.0)
+    kappa = curvature(x, y)
+    arc = 2.0 * np.pi * 120.0
+    assert float(np.degrees(abs(kappa.mean() * arc))) == pytest.approx(360.0, rel=0.02)
 
 
 def test_curvature_sign_distinguishes_left_from_right():
@@ -87,6 +121,25 @@ def test_smoothing_preserves_length():
     assert len(smooth_closed(values, 15)) == 250
 
 
-def test_heading_change_rejects_mismatched_lengths():
-    with pytest.raises(ValueError):
-        heading_change_deg(np.zeros(10), np.zeros(11))
+def test_a_lap_that_goes_round_once_has_winding_number_one():
+    x, y, _ = _circle(200.0)
+    assert winding_number(turn_rad(x, y)) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_winding_number_counts_a_second_loop():
+    """Two laps' worth of line reads 2, not 1.
+
+    This is what the winding check is for: a lap that failed to reset at the
+    start/finish line and ran on into the next one covers the circuit twice,
+    and no distance or duration check on its own can tell that apart from a
+    long lap.
+    """
+    x, y, _ = _circle(200.0)
+    doubled_x = np.concatenate([x, x])
+    doubled_y = np.concatenate([y, y])
+    assert winding_number(turn_rad(doubled_x, doubled_y)) == pytest.approx(2.0, abs=1e-9)
+
+
+def test_winding_number_is_negative_running_the_other_way():
+    x, y, _ = _circle(200.0)
+    assert winding_number(turn_rad(x, -y)) == pytest.approx(-1.0, abs=1e-9)

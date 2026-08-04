@@ -126,36 +126,78 @@ def smooth_closed(values: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(padded, kernel, mode="same")[window:-window]
 
 
-def curvature(
-    x: np.ndarray, y: np.ndarray, step_m: float = GRID_STEP_M
-) -> np.ndarray:
-    """Signed curvature in 1/m. Positive turns left, negative turns right.
+def _turn_and_arc(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Heading change at each sample, and the arc length belonging to it.
 
-    kappa = (x' y'' - y' x'') / (x'^2 + y'^2)^(3/2)
-
-    The line is smoothed first: GPS jitter differentiates into large spurious
-    curvature, and curvature needs two derivatives.
+    Segment *i* leaves sample *i* and the last one wraps back to sample 0, so
+    the segments form a closed polygon: their heading increments sum to a whole
+    number of turns, and their lengths sum to the line's perimeter.
     """
     xs = smooth_closed(np.asarray(x, dtype=np.float64), LINE_SMOOTH_WINDOW)
     ys = smooth_closed(np.asarray(y, dtype=np.float64), LINE_SMOOTH_WINDOW)
-    dx, dy = np.gradient(xs, step_m), np.gradient(ys, step_m)
-    ddx, ddy = np.gradient(dx, step_m), np.gradient(dy, step_m)
-    denominator = (dx**2 + dy**2) ** 1.5
-    kappa = np.where(
-        denominator > 1e-9,
-        (dx * ddy - dy * ddx) / np.maximum(denominator, 1e-9),
-        0.0,
-    )
+    dx = np.diff(xs, append=xs[0])
+    dy = np.diff(ys, append=ys[0])
+    theta = np.arctan2(dy, dx)
+    turn = (theta - np.roll(theta, 1) + np.pi) % (2 * np.pi) - np.pi
+    segment = np.hypot(dx, dy)
+    # Half the segment arriving at a sample plus half the one leaving it.
+    return turn, 0.5 * (np.roll(segment, 1) + segment)
+
+
+def turn_rad(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Signed heading change at each sample, in radians. Left turns positive.
+
+    This is the module's primitive: everything angular is derived from it, so
+    curvature and heading can never disagree about how far the line turned.
+
+    Taking the heading from the tangent rather than from a second derivative
+    matters. The obvious alternative - evaluate the curvature formula and
+    integrate it over the distance grid - measures the curvature *of the
+    smoothed line* but weights it by *unsmoothed* track distance. Smoothing
+    cuts corners, so the smoothed line is shorter than the grid exactly where
+    the track turns, and the integral is inflated exactly there. Measured over
+    the corpus, a whole lap came out at 360.6 deg on Monza but 436.8 deg on
+    COTA National, whose corners are far tighter - an error that scales with
+    how much the track turns and so is invisible on any one circuit.
+
+    The sum of this array over a whole lap is 2*pi times the winding number,
+    exactly, on every circuit and at every smoothing window.
+    """
+    return _turn_and_arc(x, y)[0]
+
+
+def curvature(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Signed curvature in 1/m. Positive turns left, negative turns right.
+
+    Curvature is heading change per unit of arc length, so it is derived from
+    :func:`turn_rad` and the arc length of the same smoothed line. Deriving
+    both from one primitive is what makes ``sum(turn) == sum(kappa * ds)``
+    hold rather than merely hold approximately.
+
+    The line is smoothed first: GPS jitter differentiates into large spurious
+    curvature.
+    """
+    turn, ds = _turn_and_arc(x, y)
+    kappa = np.where(ds > 1e-9, turn / np.maximum(ds, 1e-9), 0.0)
     return smooth_closed(kappa, CURVATURE_SMOOTH_WINDOW)
 
 
-def heading_change_deg(kappa: np.ndarray, grid: np.ndarray) -> float:
-    """Total change of heading over *grid*, in degrees.
+def heading_change_deg(turn: np.ndarray) -> float:
+    """How far the heading turned over these samples, in degrees, unsigned.
 
-    Integrated over a whole lap this is the closure check: a lap that goes
-    round the circuit once and returns to its own start must come out near
-    360 degrees. A lap that does not is geometrically broken.
+    Over a whole lap this is the closure check: a lap that goes round the
+    circuit once must come out at 360 degrees. Because the samples form a
+    closed polygon the result is then an exact multiple of 360, so the check
+    reads the lap's *shape* - see :func:`winding_number`.
     """
-    if len(kappa) != len(grid):
-        raise ValueError(f"kappa and grid differ in length: {len(kappa)} vs {len(grid)}")
-    return float(np.degrees(abs(np.trapz(kappa, grid))))
+    return float(np.degrees(abs(np.sum(np.asarray(turn, dtype=np.float64)))))
+
+
+def winding_number(turn: np.ndarray) -> float:
+    """How many times the line goes round, from the same primitive.
+
+    Exactly 1.0 (or -1.0, running clockwise) for a lap that goes round the
+    circuit once. Measured over the corpus this held for 1097 of 1098 laps;
+    the one exception was a lap with a 74 m jump in its recorded position.
+    """
+    return float(np.degrees(np.sum(np.asarray(turn, dtype=np.float64))) / 360.0)

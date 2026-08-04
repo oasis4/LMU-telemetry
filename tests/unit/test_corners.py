@@ -11,7 +11,22 @@ from lmu_telemetry.core.geometry import (
     curvature,
     grid_for,
     heading_change_deg,
+    turn_rad,
 )
+
+
+def _detect(kappa, grid):
+    """``detect_corners`` for a curvature array written out by hand.
+
+    Curvature is heading change per metre of arc, so a curvature array laid on
+    a uniform grid turns ``kappa * GRID_STEP_M`` at each sample. Deriving the
+    turning array from kappa here ties the two together in exactly the way
+    ``geometry.curvature`` and ``geometry.turn_rad`` are tied together for a
+    real line, so a test that writes down a shape does not also have to write
+    down its turning.
+    """
+    kappa = np.asarray(kappa, dtype=float)
+    return detect_corners(kappa, grid, kappa * GRID_STEP_M)
 
 
 def _oval(straight_m: float, radius_m: float):
@@ -38,38 +53,38 @@ def _oval(straight_m: float, radius_m: float):
 
 def test_an_oval_has_exactly_two_corners():
     x, y, grid = _oval(600.0, 120.0)
-    corners = detect_corners(curvature(x, y), grid)
+    corners = detect_corners(curvature(x, y), grid, turn_rad(x, y))
     assert len(corners) == 2
 
 
 def test_oval_corners_report_the_geometric_radius():
     x, y, grid = _oval(600.0, 120.0)
-    for c in detect_corners(curvature(x, y), grid):
+    for c in detect_corners(curvature(x, y), grid, turn_rad(x, y)):
         assert c.radius_m == pytest.approx(120.0, rel=0.15)
 
 
 def test_each_oval_corner_turns_about_180_degrees():
     x, y, grid = _oval(600.0, 120.0)
-    for c in detect_corners(curvature(x, y), grid):
+    for c in detect_corners(curvature(x, y), grid, turn_rad(x, y)):
         assert c.heading_deg == pytest.approx(180.0, abs=25.0)
 
 
 def test_a_straight_track_has_no_corners():
     grid = grid_for(2000.0)
-    corners = detect_corners(np.zeros_like(grid), grid)
+    corners = _detect(np.zeros_like(grid), grid)
     assert corners == []
 
 
 def test_a_gentle_bend_wider_than_the_radius_limit_is_not_a_corner():
     """A 900 m radius sweep is a straight with a kink, not a corner."""
     grid = grid_for(1200.0)
-    corners = detect_corners(np.full_like(grid, 1.0 / 900.0), grid)
+    corners = _detect(np.full_like(grid, 1.0 / 900.0), grid)
     assert corners == []
 
 
 def test_corners_are_numbered_in_track_order():
     x, y, grid = _oval(600.0, 120.0)
-    corners = detect_corners(curvature(x, y), grid)
+    corners = detect_corners(curvature(x, y), grid, turn_rad(x, y))
     assert [c.index for c in corners] == [1, 2]
     assert [c.name for c in corners] == ["T1", "T2"]
     # The oval's second bend ends exactly at the lap length, so smoothing
@@ -85,8 +100,8 @@ def test_direction_follows_the_sign_of_curvature():
     grid = grid_for(400.0)
     k = np.zeros_like(grid)
     k[50:150] = 1.0 / 60.0    # left
-    left = detect_corners(k, grid)
-    right = detect_corners(-k, grid)
+    left = _detect(k, grid)
+    right = _detect(-k, grid)
     assert left[0].direction == "L"
     assert right[0].direction == "R"
 
@@ -96,7 +111,7 @@ def test_apex_sits_at_the_tightest_point():
     k = np.zeros_like(grid)
     k[50:150] = 1.0 / 100.0
     k[99] = 1.0 / 40.0     # a single unambiguous tightest sample
-    c = detect_corners(k, grid)[0]
+    c = _detect(k, grid)[0]
     assert c.apex_m == pytest.approx(grid[99], abs=GRID_STEP_M)
 
 
@@ -141,10 +156,10 @@ def test_gate_holds_a_shallow_two_peak_block_together():
     pins the gate, not the peak search.
     """
     k, grid = _two_peak_curvature(scale=1.0)
-    heading = heading_change_deg(k[100:300], grid[100:300])
+    heading = heading_change_deg(k[100:300] * GRID_STEP_M)
     assert heading < 180.0
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert len(corners) == 1
 
 
@@ -157,10 +172,10 @@ def test_gate_splits_the_same_shape_scaled_past_it():
     about the peak search changed between the two tests.
     """
     k, grid = _two_peak_curvature(scale=2.0)
-    heading = heading_change_deg(k[100:300], grid[100:300])
+    heading = heading_change_deg(k[100:300] * GRID_STEP_M)
     assert heading > 180.0
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert len(corners) == 2
 
 
@@ -177,7 +192,7 @@ def test_merge_gap_below_threshold_merges_same_signed_bends():
     gap_m = (grid[160] - grid[149])
     assert gap_m < MERGE_GAP_M
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert len(corners) == 1
     # combined heading must stay under the split gate, or the merge would
     # just be undone again by _split.
@@ -194,7 +209,7 @@ def test_merge_gap_above_threshold_keeps_bends_separate():
     gap_m = (grid[175] - grid[149])
     assert gap_m > MERGE_GAP_M
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert len(corners) == 2
 
 
@@ -205,7 +220,7 @@ def test_opposite_signed_bends_never_merge():
     k[100:150] = 1.0 / 100.0    # left bend
     k[160:210] = -1.0 / 100.0   # right bend, only 22 m away
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert len(corners) == 2
     assert {c.direction for c in corners} == {"L", "R"}
 
@@ -240,8 +255,8 @@ def test_a_corner_straddling_the_start_finish_line_is_one_corner():
     """Scanned linearly this bend is cut in half by an arbitrary line."""
     wrapped, middle, grid = _wrapped_and_middle(20, 30, 1.0 / 60.0)
 
-    mid_corners = detect_corners(middle, grid)
-    wrap_corners = detect_corners(wrapped, grid)
+    mid_corners = _detect(middle, grid)
+    wrap_corners = _detect(wrapped, grid)
 
     assert len(mid_corners) == 1
     assert len(wrap_corners) == 1
@@ -259,8 +274,8 @@ def test_a_short_corner_straddling_the_start_finish_line_does_not_vanish():
     the corner entirely - and silently, which is the worse failure."""
     wrapped, middle, grid = _wrapped_and_middle(10, 10, 1.0 / 50.0)
 
-    assert len(detect_corners(middle, grid)) == 1
-    corners = detect_corners(wrapped, grid)
+    assert len(_detect(middle, grid)) == 1
+    corners = _detect(wrapped, grid)
     assert len(corners) == 1
     assert corners[0].heading_deg > CORNER_MIN_HEADING_DEG
 
@@ -270,7 +285,7 @@ def test_a_wrapping_corner_is_measured_over_the_whole_joined_region():
     wrapped, middle, grid = _wrapped_and_middle(20, 30, 1.0 / 60.0)
     wrapped[-10:] = 1.0 / 25.0  # the tightest point sits before d=0
 
-    corner = detect_corners(wrapped, grid)[0]
+    corner = _detect(wrapped, grid)[0]
     assert corner.radius_m == pytest.approx(25.0, rel=0.05)
     assert corner.apex_m > 900.0  # apex found in the pre-d=0 half
     assert corner.start_m > corner.end_m
@@ -283,7 +298,7 @@ def test_opposite_signed_bends_across_the_start_finish_line_stay_separate():
     k[-25:] = 1.0 / 60.0
     k[:25] = -1.0 / 60.0
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert len(corners) == 2
     assert {c.direction for c in corners} == {"L", "R"}
 
@@ -298,7 +313,7 @@ def test_a_wrapping_corner_is_first_and_corners_stay_in_track_order():
     k[200:250] = 1.0 / 60.0
     k[350:400] = 1.0 / 60.0
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert [c.index for c in corners] == [1, 2, 3]
     assert [c.name for c in corners] == ["T1", "T2", "T3"]
     assert corners[0].start_m > corners[0].end_m       # the wrapping one
@@ -342,8 +357,8 @@ def test_split_recursion_performs_a_genuine_second_level_cut():
     # once between them, leaving A and B fused in a part that is still over
     # the gate. Only the recursive call - with D out of the segment - finds
     # B's prominence large enough to detect and cut a second time.
-    region_heading = heading_change_deg(k[100:799], grid[100:799])
+    region_heading = heading_change_deg(k[100:799] * GRID_STEP_M)
     assert region_heading > 180.0
 
-    corners = detect_corners(k, grid)
+    corners = _detect(k, grid)
     assert len(corners) == 3

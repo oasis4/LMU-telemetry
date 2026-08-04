@@ -263,13 +263,14 @@ def build_track_model(sessions) -> "TrackModel | None":
     x, y = reference_line(lines)
     grid = geometry.grid_for(track_length)
     kappa = geometry.curvature(x, y)
-    closure = geometry.heading_change_deg(kappa, grid)
+    turn = geometry.turn_rad(x, y)
+    closure = geometry.heading_change_deg(turn)
     # Named here rather than by the caller. A model that leaves
     # build_track_model as T1..Tn is persisted that way by save_model and
     # comes back that way from load_model, so a curated name applied
     # afterwards would exist only in whichever caller remembered to apply it.
     # Naming is part of what a TrackModel *is*, so it happens once, here.
-    corners = apply_names(detect_corners(kappa, grid), key.track)
+    corners = apply_names(detect_corners(kappa, grid, turn), key.track)
 
     confident = len(lines) >= MIN_CONFIDENT_LAPS
     warning = None

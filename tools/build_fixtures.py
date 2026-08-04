@@ -59,10 +59,25 @@ FIXTURES: list[tuple[str, str, float | None, str]] = [
     ),
     (
         "Autodromo Enzo e Dino Ferrari_R_2026-04-04T18_46_34Z.duckdb",
-        "imola_r_unclosed_lap.duckdb",
+        "imola_r_fused_formation_lap.duckdb",
         500.0,
-        "its only complete racing lap closes at 406 deg, so the track "
-        "legitimately yields no reference model",
+        "lap 0 covers 1.93 track lengths: the formation lap fused with the "
+        "first racing lap",
+    ),
+    (
+        "Autodromo Nazionale Monza_R_2026-04-04T19_41_31Z.duckdb",
+        "monza_r_position_jump.duckdb",
+        540.0,
+        "lap 1 winds exactly once and covers 1.002 track lengths, but its "
+        "position jumps 41 m between samples 2 m apart; lap 2 is clean, so "
+        "the fixture is not a broken recording throughout",
+    ),
+    (
+        "Paul Ricard Circuit_P_2026-07-03T19_11_28Z.duckdb",
+        "paul_ricard_p_zero_winding.duckdb",
+        420.0,
+        "lap 2 covers 1.011 track lengths yet winds 0.00 times round the "
+        "circuit: a 74 m position jump cancels its turning",
     ),
 ]
 

@@ -63,8 +63,24 @@ def no_complete_lap_file() -> Path:
 
 
 @pytest.fixture(scope="session")
-def imola_unclosed_file() -> Path:
-    path = FIXTURE_DIR / "imola_r_unclosed_lap.duckdb"
+def imola_fused_lap_file() -> Path:
+    path = FIXTURE_DIR / "imola_r_fused_formation_lap.duckdb"
     if not path.is_file():
         pytest.skip("imola fixture not built")
+    return path
+
+
+@pytest.fixture(scope="session")
+def position_jump_file() -> Path:
+    path = FIXTURE_DIR / "monza_r_position_jump.duckdb"
+    if not path.is_file():
+        pytest.skip("position-jump fixture not built")
+    return path
+
+
+@pytest.fixture(scope="session")
+def zero_winding_file() -> Path:
+    path = FIXTURE_DIR / "paul_ricard_p_zero_winding.duckdb"
+    if not path.is_file():
+        pytest.skip("zero-winding fixture not built")
     return path

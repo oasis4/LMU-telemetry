@@ -203,8 +203,8 @@ def test_a_cached_model_comes_back_named(monza_q_file, fixture_dir, tmp_path):
     assert "Curva Parabolica" in [c.name for c in again.corners]
 
 
-def test_sessions_from_different_tracks_are_rejected(monza_q_file, imola_unclosed_file):
+def test_sessions_from_different_tracks_are_rejected(monza_q_file, imola_fused_lap_file):
     """Two identities in one call is a caller error, not something to average."""
-    with Session.open(monza_q_file) as a, Session.open(imola_unclosed_file) as b:
+    with Session.open(monza_q_file) as a, Session.open(imola_fused_lap_file) as b:
         with pytest.raises(ValueError):
             build_track_model([a, b])

@@ -128,8 +128,8 @@ def _join_wrap(regions, kappa, n_samples):
     return [(last_start, first_end)] + regions[1:-1]
 
 
-def _region(kappa, grid, si, ei):
-    """Sample indices, curvature and distance for one region.
+def _region(kappa, grid, turn, si, ei):
+    """Sample indices, curvature, distance and turning for one region.
 
     A region that wraps gets a distance axis that continues past the end of
     the lap rather than jumping back to zero, so heading, length and the peak
@@ -137,11 +137,11 @@ def _region(kappa, grid, si, ei):
     """
     if si <= ei:
         idx = np.arange(si, ei + 1)
-        return idx, kappa[idx], grid[idx]
+        return idx, kappa[idx], grid[idx], turn[idx]
     lap_length = float(grid[-1]) - float(grid[0]) + float(grid[1] - grid[0])
     idx = np.concatenate([np.arange(si, len(grid)), np.arange(0, ei + 1)])
     dist = np.concatenate([grid[si:], grid[: ei + 1] + lap_length])
-    return idx, kappa[idx], dist
+    return idx, kappa[idx], dist, turn[idx]
 
 
 def _split_once(kappa, grid) -> list[tuple[int, int]]:
@@ -182,11 +182,11 @@ def _split_once(kappa, grid) -> list[tuple[int, int]]:
     return parts
 
 
-def _split(kappa, grid, depth: int = 0) -> list[tuple[int, int]]:
+def _split(kappa, grid, turn, depth: int = 0) -> list[tuple[int, int]]:
     last = len(kappa) - 1
     if depth >= SPLIT_MAX_DEPTH:
         return [(0, last)]
-    if heading_change_deg(kappa, grid) <= SPLIT_HEADING_GATE_DEG:
+    if heading_change_deg(turn) <= SPLIT_HEADING_GATE_DEG:
         return [(0, last)]
     parts = _split_once(kappa, grid)
     if len(parts) == 1:
@@ -195,21 +195,33 @@ def _split(kappa, grid, depth: int = 0) -> list[tuple[int, int]]:
     for ps, pe in parts:
         out.extend(
             (ps + a, ps + b)
-            for a, b in _split(kappa[ps : pe + 1], grid[ps : pe + 1], depth + 1)
+            for a, b in _split(
+                kappa[ps : pe + 1], grid[ps : pe + 1], turn[ps : pe + 1], depth + 1
+            )
         )
     return out
 
 
-def detect_corners(kappa: np.ndarray, grid: np.ndarray) -> list[Corner]:
+def detect_corners(
+    kappa: np.ndarray, grid: np.ndarray, turn: np.ndarray
+) -> list[Corner]:
     """Every corner on the line described by *kappa*, in track order.
 
     A corner containing the start/finish line is reported once, spanning the
     wrap, and comes first - see :class:`Corner`.
+
+    *kappa* and *turn* must come from the same line - :func:`geometry.curvature`
+    and :func:`geometry.turn_rad` of one pair of coordinate arrays. Curvature
+    decides where a corner is and how tight it is; turning decides how far
+    through it the car goes.
     """
     kappa = np.asarray(kappa, dtype=np.float64)
     grid = np.asarray(grid, dtype=np.float64)
-    if len(kappa) != len(grid):
-        raise ValueError(f"kappa and grid differ: {len(kappa)} vs {len(grid)}")
+    turn = np.asarray(turn, dtype=np.float64)
+    if not len(kappa) == len(grid) == len(turn):
+        raise ValueError(
+            f"kappa, grid and turn differ: {len(kappa)}, {len(grid)}, {len(turn)}"
+        )
 
     regions = _join_wrap(
         _merge(_contiguous(np.abs(kappa) > 1.0 / CORNER_MAX_RADIUS_M), kappa, grid),
@@ -220,11 +232,11 @@ def detect_corners(kappa: np.ndarray, grid: np.ndarray) -> list[Corner]:
 
     found: list[tuple[float, Corner]] = []
     for si, ei in regions:
-        idx, region_kappa, region_grid = _region(kappa, grid, si, ei)
-        for ps, pe in _split(region_kappa, region_grid):
-            heading = heading_change_deg(
-                region_kappa[ps : pe + 1], region_grid[ps : pe + 1]
-            )
+        idx, region_kappa, region_grid, region_turn = _region(
+            kappa, grid, turn, si, ei
+        )
+        for ps, pe in _split(region_kappa, region_grid, region_turn):
+            heading = heading_change_deg(region_turn[ps : pe + 1])
             if heading < CORNER_MIN_HEADING_DEG:
                 continue
             if region_grid[pe] - region_grid[ps] < CORNER_MIN_LENGTH_M:

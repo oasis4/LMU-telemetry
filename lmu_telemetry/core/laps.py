@@ -36,6 +36,13 @@ class Lap:
     sectors_s: tuple[float, float, float] | None
     touched_pits: bool
     distance_m: float
+    #: The lap time the game itself recorded at the closing crossing, if it
+    #: recorded one. ``None`` means no ``Lap Time`` event landed there;
+    #: ``0.0`` is the game's own way of saying the lap earned no time at all.
+    #: This is not the same number as ``duration_s``: that one is derived from
+    #: the ``Lap`` event timestamps, and comparing the two is how a file with
+    #: unreliable lap boundaries gives itself away.
+    recorded_time_s: float | None = None
 
 
 def _touched_pits(tf, t_start: float, t_end: float) -> bool:
@@ -68,6 +75,25 @@ def _distance_covered(tf, timebase: TimeBase, t_start: float, t_end: float) -> f
     return float(np.sum(steps[steps > 0.0]))
 
 
+#: How far from a lap's closing crossing a ``Lap Time`` event may sit and
+#: still be that lap's. The event is written at the crossing, so this only
+#: absorbs the gap between the two event streams' timestamps.
+LAP_TIME_MATCH_WINDOW_S = 2.0
+
+
+def _recorded_lap_time(lap_time_events, t_end: float) -> float | None:
+    """The lap time the game wrote at *t_end*, or None if it wrote none."""
+    if lap_time_events is None:
+        return None
+    ts, values = lap_time_events
+    near = np.abs(ts - t_end) < LAP_TIME_MATCH_WINDOW_S
+    if not np.any(near):
+        return None
+    candidates = np.flatnonzero(near)
+    closest = candidates[np.argmin(np.abs(ts[candidates] - t_end))]
+    return float(values[closest])
+
+
 def segment_laps(tf, timebase: TimeBase) -> list[Lap]:
     """Return every lap that is bounded by two consecutive ``Lap`` events."""
     events = tf.events("Lap")
@@ -77,6 +103,7 @@ def segment_laps(tf, timebase: TimeBase) -> list[Lap]:
     if len(ts) < 2:
         return []
     sector_events = tf.events("Current Sector")
+    lap_time_events = tf.events("Lap Time")
 
     laps: list[Lap] = []
     for i in range(len(ts) - 1):
@@ -91,6 +118,7 @@ def segment_laps(tf, timebase: TimeBase) -> list[Lap]:
                 sectors_s=sector_times(sector_events, t_start, t_end),
                 touched_pits=_touched_pits(tf, t_start, t_end),
                 distance_m=_distance_covered(tf, timebase, t_start, t_end),
+                recorded_time_s=_recorded_lap_time(lap_time_events, t_end),
             )
         )
     return laps

@@ -20,13 +20,35 @@ from . import geometry
 from .laps import Lap
 from .session import Session
 
-#: A closed lap integrates to 360 degrees of heading change. Real laps scatter
-#: around that; outside this band the lap is geometrically broken.
-CLOSURE_MIN_DEG = 330.0
-CLOSURE_MAX_DEG = 390.0
+#: A lap that goes round the circuit once has winding number 1. Because the
+#: samples form a closed polygon this quantity is an exact multiple of 1, so
+#: the tolerance only absorbs floating-point error - it is not a band that
+#: real laps scatter across.
+WINDING_TOLERANCE = 0.02
+
+#: Largest planar move allowed between two adjacent grid samples, in metres.
+#: The grid advances 2 m of track distance per step, so the position should
+#: advance about 2 m too; a recording gap or a teleport shows up here.
+#:
+#: This is a policy, not a measured constant. Over the corpus the largest
+#: interior step per lap runs continuously from 2 m to 74 m with no gap to cut
+#: at: median 2.45 m, p90 3.61 m, p99 30.2 m. Five grid steps sits well above
+#: the ordinary range and rejects 3.5 % of otherwise-admissible laps.
+MAX_POSITION_STEP_M = 10.0
 
 #: Covered distance must be within this fraction of the track length.
 DISTANCE_TOLERANCE = 0.02
+
+#: How far our derived duration may differ from the lap time the game itself
+#: recorded, in seconds.
+#:
+#: The two are measured independently - ours from the ``Lap`` event timestamps,
+#: the game's from its own timing - so agreement is evidence that the lap
+#: boundaries are right. Across the corpus 913 of 995 laps agree to within
+#: 17 ms, and the laps that disagree miss by more than a second, up to 8.5 s.
+#: Exactly two laps fall in between, so this threshold sits in a real gap
+#: rather than cutting through a population.
+LAP_TIME_TOLERANCE_S = 0.1
 
 
 @dataclass(frozen=True)
@@ -34,10 +56,15 @@ class LapQuality:
     is_clean: bool
     reason: str | None
     closure_deg: float | None
+    max_step_m: float | None = None
 
 
-def _rejected(reason: str, closure: float | None = None) -> LapQuality:
-    return LapQuality(is_clean=False, reason=reason, closure_deg=closure)
+def _rejected(
+    reason: str, closure: float | None = None, max_step: float | None = None
+) -> LapQuality:
+    return LapQuality(
+        is_clean=False, reason=reason, closure_deg=closure, max_step_m=max_step
+    )
 
 
 def coverage_reason(d_sorted: np.ndarray, track_length_m: float) -> str | None:
@@ -132,6 +159,20 @@ def assess_lap(session: Session, lap: Lap) -> LapQuality:
             "lap 0 runs from the start of recording to the first timed crossing"
         )
 
+    # The game's own verdict comes first: it is exact, it costs nothing to
+    # read, and no amount of geometry can overrule a lap the game itself
+    # refused to time.
+    if lap.recorded_time_s == 0.0:
+        return _rejected("the game recorded no lap time for this lap")
+    if lap.recorded_time_s is not None:
+        drift = abs(lap.duration_s - lap.recorded_time_s)
+        if drift > LAP_TIME_TOLERANCE_S:
+            return _rejected(
+                f"our duration {lap.duration_s:.3f} s disagrees with the "
+                f"{lap.recorded_time_s:.3f} s the game recorded, by "
+                f"{drift:.3f} s - the lap boundaries in this file are unreliable"
+            )
+
     track_length = session.track_length_m
     if track_length is None:
         return _rejected("the session has no established track length")
@@ -145,23 +186,39 @@ def assess_lap(session: Session, lap: Lap) -> LapQuality:
             f"+-{DISTANCE_TOLERANCE:.2f}"
         )
 
-    # No origin: one lap is judged entirely on its own, and curvature and the
-    # closure integral are both translation-invariant, so this lap's own mean
-    # is as good a frame as any. Callers that combine laps must pass an origin.
+    # No origin: one lap is judged entirely on its own, and every quantity
+    # measured below is translation-invariant, so this lap's own mean is as
+    # good a frame as any. Callers that combine laps must pass an origin.
     line, reason = lap_line_on_grid(session, lap, track_length)
     if line is None:
         return _rejected(reason)
     xs, ys = line
-    grid = geometry.grid_for(track_length)
-    closure = geometry.heading_change_deg(geometry.curvature(xs, ys), grid)
 
-    if not (CLOSURE_MIN_DEG <= closure <= CLOSURE_MAX_DEG):
+    # The wrap segment is excluded: the last grid point and the first belong to
+    # two different passes over the start/finish line, so the gap between them
+    # is the driver taking a different line, not a break in the recording.
+    max_step = float(np.hypot(np.diff(xs), np.diff(ys)).max())
+
+    turn = geometry.turn_rad(xs, ys)
+    closure = geometry.heading_change_deg(turn)
+    winding = geometry.winding_number(turn)
+
+    if abs(abs(winding) - 1.0) > WINDING_TOLERANCE:
         return _rejected(
-            f"lap closure {closure:.0f} deg is outside "
-            f"{CLOSURE_MIN_DEG:.0f}-{CLOSURE_MAX_DEG:.0f}",
+            f"the lap winds {winding:.2f} times round the circuit, not once",
             closure,
+            max_step,
         )
-    return LapQuality(is_clean=True, reason=None, closure_deg=closure)
+    if max_step > MAX_POSITION_STEP_M:
+        return _rejected(
+            f"position jumps {max_step:.0f} m between samples 2 m apart, "
+            f"more than the {MAX_POSITION_STEP_M:.0f} m allowed",
+            closure,
+            max_step,
+        )
+    return LapQuality(
+        is_clean=True, reason=None, closure_deg=closure, max_step_m=max_step
+    )
 
 
 def clean_laps(session: Session) -> list[Lap]:

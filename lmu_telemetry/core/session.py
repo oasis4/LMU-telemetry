@@ -103,7 +103,17 @@ class Session:
 
     @property
     def fastest_lap(self) -> Lap | None:
-        candidates = [l for l in self.laps if not l.touched_pits]
+        """The quickest lap that is a lap time at all.
+
+        Lap 0 is excluded, not merely deprioritised. It runs from the moment
+        recording started to the first timed crossing, so it is however much
+        of a lap the recording happened to catch - on one Sebring session,
+        43.3 s of a 5820 m circuit, an average of 483 km/h. Ranking it against
+        real laps by duration puts it first. Filtering only on
+        ``touched_pits`` misses it whenever the car did not pass through the
+        pits, which is exactly the case that produces an impossible time.
+        """
+        candidates = [l for l in self.laps if l.number > 0 and not l.touched_pits]
         if not candidates:
             return None
         return min(candidates, key=lambda l: l.duration_s)
