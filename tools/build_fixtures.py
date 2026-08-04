@@ -1,9 +1,15 @@
-"""Extract small, real test fixtures from the local telemetry corpus.
+"""Extract small, real test fixtures from the local telemetry recordings.
 
-The corpus itself is gitignored (637 MB).  These fixtures are committed so the
-test suite has real data to run against in CI.  They keep only the tables the
-tests read, blank the 38 kB CarSetup JSON, and use a 16 kB DuckDB block size -
-which takes the Monza reference session from 8.6 MB down to 860 kB.
+The recordings themselves are gitignored (4.1 GB).  These fixtures are
+committed so the test suite has real data to run against in CI.  They keep
+only the tables the tests read, blank the 38 kB CarSetup JSON, and use a 16 kB
+DuckDB block size - which takes the Monza reference session from 8.6 MB down
+to 860 kB.
+
+Sources are looked for in the working set and then in the archive, because a
+fixture is chosen for the edge case it carries and that is often the same
+reason curation archived it: three of the seven below are sessions with no
+usable lap at all.
 
 Run from the repository root:
 
@@ -18,7 +24,7 @@ from pathlib import Path
 import duckdb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CORPUS = REPO_ROOT / "LMU Data-20260803T093100Z-1-001" / "LMU Data"
+SOURCE_DIRS = [REPO_ROOT / "data" / "sessions", REPO_ROOT / "data" / "archive"]
 OUT_DIR = REPO_ROOT / "tests" / "fixtures"
 
 BLOCK_SIZE = 16384
@@ -138,13 +144,21 @@ def build(source: Path, dest: Path, keep_seconds: float | None) -> None:
         con.close()
 
 
+def _find(name: str) -> Path | None:
+    for directory in SOURCE_DIRS:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def main() -> None:
-    if not CORPUS.is_dir():
-        raise SystemExit(f"corpus not found at {CORPUS}")
+    if not any(d.is_dir() for d in SOURCE_DIRS):
+        raise SystemExit(f"no recordings found under {[str(d) for d in SOURCE_DIRS]}")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for src_name, dest_name, keep, why in FIXTURES:
-        source = CORPUS / src_name
-        if not source.is_file():
+        source = _find(src_name)
+        if source is None:
             print(f"SKIP {dest_name}: source missing ({src_name})")
             continue
         dest = OUT_DIR / dest_name

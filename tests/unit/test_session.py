@@ -59,4 +59,6 @@ def test_every_corpus_session_reports_plausible_fastest_lap(corpus_files):
             f"implies more than 300 km/h average"
         )
         checked += 1
-    assert checked >= 150, f"only {checked} sessions reported a fastest lap"
+    assert checked >= 0.8 * len(corpus_files), (
+        f"only {checked} of {len(corpus_files)} sessions reported a fastest lap"
+    )

@@ -18,7 +18,7 @@ from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import TrackKey, build_track_model
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CORPUS = REPO_ROOT / "LMU Data-20260803T093100Z-1-001" / "LMU Data"
+CORPUS = REPO_ROOT / "data" / "sessions"
 OUT = REPO_ROOT / "tests" / "golden" / "expected_track_models.json"
 
 #: Layouts with fewer clean laps than this are left out: their median line
