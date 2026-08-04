@@ -18,6 +18,9 @@ dev = ["pytest>=7.4"]
 [tool.setuptools.packages.find]
 include = ["lmu_telemetry*"]
 
+[tool.setuptools.package-data]
+lmu_telemetry = ["data/tracks/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

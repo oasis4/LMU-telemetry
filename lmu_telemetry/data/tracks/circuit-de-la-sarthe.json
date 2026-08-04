@@ -1,0 +1,30 @@
+{
+  "track": "Circuit de la Sarthe",
+  "corners": [
+    {"apex_m": 670,   "name": "Dunlop Curve",        "turns": "1"},
+    {"apex_m": 844,   "name": "Dunlop Chicane 1",    "turns": "2"},
+    {"apex_m": 908,   "name": "Dunlop Chicane 2",    "turns": "3"},
+    {"apex_m": 1270,  "name": "Esses 1",             "turns": "4"},
+    {"apex_m": 1490,  "name": "Esses 2",             "turns": "5"},
+    {"apex_m": 1590,  "name": "Esses 3",             "turns": "6"},
+    {"apex_m": 1914,  "name": "Tertre Rouge",        "turns": "7"},
+    {"apex_m": 4056,  "name": "Mulsanne Chicane 1a", "turns": "8"},
+    {"apex_m": 4134,  "name": "Mulsanne Chicane 1b", "turns": "9"},
+    {"apex_m": 4224,  "name": "Mulsanne Chicane 1c", "turns": "10"},
+    {"apex_m": 6016,  "name": "Mulsanne Chicane 2a", "turns": "11"},
+    {"apex_m": 6086,  "name": "Mulsanne Chicane 2b", "turns": "12"},
+    {"apex_m": 6200,  "name": "Mulsanne Chicane 2c", "turns": "13"},
+    {"apex_m": 7738,  "name": "Mulsanne Corner",     "turns": "14"},
+    {"apex_m": 9650,  "name": "Indianapolis 1",      "turns": "15"},
+    {"apex_m": 9832,  "name": "Indianapolis 2",      "turns": "16"},
+    {"apex_m": 10160, "name": "Arnage",              "turns": "17"},
+    {"apex_m": 11532, "name": "Porsche Curves 1",    "turns": "18"},
+    {"apex_m": 11792, "name": "Porsche Curves 2",    "turns": "19"},
+    {"apex_m": 12212, "name": "Porsche Curves 3",    "turns": "20"},
+    {"apex_m": 12434, "name": "Porsche Curves 4",    "turns": "21"},
+    {"apex_m": 13254, "name": "Ford Chicane 1",      "turns": "22"},
+    {"apex_m": 13318, "name": "Ford Chicane 2",      "turns": "23"},
+    {"apex_m": 13406, "name": "Ford Chicane 3",      "turns": "24"},
+    {"apex_m": 13446, "name": "Ford Chicane 4",      "turns": "25"}
+  ]
+}
