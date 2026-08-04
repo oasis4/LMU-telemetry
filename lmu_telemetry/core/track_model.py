@@ -45,9 +45,18 @@ class TrackKey:
         )
 
     def slug(self) -> str:
-        """A filesystem-safe identifier, used as the cache filename."""
-        raw = f"{self.track}-{self.layout}-{self.length_bucket_m}"
-        return re.sub(r"[^A-Za-z0-9]+", "-", raw).strip("-").lower()
+        """A filesystem-safe identifier, used as the cache filename.
+
+        Each field is slugified separately and joined with a double hyphen.
+        Slugifying the concatenation instead would let ("A", "B-C") and
+        ("A-B", "C") collide onto one filename, silently merging two tracks'
+        cached models. A slugified field never contains a double hyphen, so
+        this joiner is unambiguous.
+        """
+        parts = (self.track, self.layout, str(self.length_bucket_m))
+        return "--".join(
+            re.sub(r"[^A-Za-z0-9]+", "-", part).strip("-").lower() for part in parts
+        )
 
 
 def reference_line(lines) -> tuple[np.ndarray, np.ndarray]:
