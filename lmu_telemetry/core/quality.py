@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import geometry
-from .laps import Lap
+from .laps import RESET_GRACE_S, Lap, one_lap_slice
 from .session import Session
 
 #: A lap that goes round the circuit once has winding number 1. Because the
@@ -104,16 +104,31 @@ def lap_line_on_grid(
     *origin* is handed straight to :func:`geometry.project_enu`. A caller that
     combines several laps must supply one, or every lap lands in its own frame.
     """
-    lat = session.lap_channel(lap, "GPS Latitude")
-    lon = session.lap_channel(lap, "GPS Longitude")
-    dist = session.lap_channel(lap, "Lap Dist")
+    lat, _ = session.lap_channel_from_crossing(lap, "GPS Latitude", RESET_GRACE_S)
+    lon, _ = session.lap_channel_from_crossing(lap, "GPS Longitude", RESET_GRACE_S)
+    dist, _ = session.lap_channel_from_crossing(lap, "Lap Dist", RESET_GRACE_S)
     n = min(len(lat), len(lon), len(dist))
     if n < 100:
         return None, f"only {n} position samples"
 
-    x, y = geometry.project_enu(lat[:n], lon[:n], origin)
-    order = np.argsort(dist[:n])
-    d_sorted = dist[:n][order]
+    # Keep only the samples between this lap's own two crossings of the line.
+    # Sorting by distance without this puts the *next* lap's samples at the
+    # front, and the line measured here is then stitched from two laps across
+    # the start/finish line - while looking like a lap that spans the track.
+    own = one_lap_slice(
+        np.asarray(dist[:n], dtype=np.float64),
+        session.file.channels.require("Lap Dist").frequency_hz,
+        track_length_m,
+        RESET_GRACE_S,
+    )
+    lat, lon, dist = lat[:n][own], lon[:n][own], dist[:n][own]
+    n = len(dist)
+    if n < 100:
+        return None, f"only {n} position samples inside this lap's own crossings"
+
+    x, y = geometry.project_enu(lat, lon, origin)
+    order = np.argsort(dist)
+    d_sorted = dist[order]
     keep = np.concatenate(([True], np.diff(d_sorted) > 1e-6))
     d_sorted = d_sorted[keep]
 

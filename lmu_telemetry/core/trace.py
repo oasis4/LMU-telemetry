@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import geometry
-from .laps import Lap
+from .laps import RESET_GRACE_S, Lap, one_lap_slice
 from .quality import DISTANCE_TOLERANCE
 
 #: Channel name -> attribute on :class:`LapTrace`. Anything here must exist in
@@ -64,55 +64,41 @@ class LapTrace:
         }
 
 
-#: How long after a lap's start the distance reset may still arrive, in
-#: seconds. The window is mapped onto sample indices by rounding, so its first
-#: samples can still belong to the previous lap.
-RESET_GRACE_S = 2.0
-
-
 def _progress(session, lap: Lap, track_length_m: float):
     """How far round the lap the car is, against seconds since it began.
 
-    Two things have to be dealt with, and both were measured rather than
-    guessed on the Monza reference session.
+    The window is trimmed to this lap's own crossings first - see
+    :func:`laps.one_lap_slice` - because its first sample can still carry the
+    previous lap's distance and its last the next lap's. Left in, the leading
+    one sits above every later value and the running maximum flattens the
+    whole lap.
 
-    The window's first sample can still carry the *previous* lap's distance -
-    5776 m of a 5776 m circuit, one sample before the reset - because the lap
-    boundary is an event timestamp and the channel is sampled at 10 Hz. Left
-    in, it sits above every later value and flattens the whole lap.
-
-    After that, ``Lap Dist`` still is not monotonic sample to sample: it
-    wobbles backwards by centimetres. Progress round a lap is its running
-    maximum, which is non-decreasing by construction. Sorting the raw values
-    by distance instead - the obvious alternative - reorders time along with
-    them, and the time axis then runs backwards wherever distance did.
+    ``Lap Dist`` is then still not monotonic sample to sample: it wobbles
+    backwards by centimetres, and on 24 of the working set's 426 clean laps by
+    metres. Progress round a lap is its running maximum, which is
+    non-decreasing by construction. Sorting the raw values by distance
+    instead - the obvious alternative - reorders time along with them, and the
+    time axis then runs backwards wherever distance did.
     """
-    distance = np.asarray(session.lap_channel(lap, "Lap Dist"), dtype=np.float64)
+    raw, _offset = session.lap_channel_from_crossing(lap, "Lap Dist", RESET_GRACE_S)
+    distance = np.asarray(raw, dtype=np.float64)
     if len(distance) < 2:
         raise TraceError(f"lap {lap.number}: only {len(distance)} distance samples")
     hz = session.file.channels.require("Lap Dist").frequency_hz
-    elapsed = np.arange(len(distance), dtype=np.float64) / hz
 
-    # A lap is bounded by two crossings of the start/finish line, and Lap Dist
-    # resets at a crossing. Both of them can fall inside the window, because
-    # the boundary is an event timestamp while the channel is sampled at
-    # 10 Hz: the opening reset lands just after the window starts and the
-    # closing one just before it ends. Both belong to the neighbours.
-    #
-    # Rejecting a lap for the closing reset cost 140 of the working set's 426
-    # clean laps - a third of them - so the window is trimmed to the samples
-    # between the two instead. Whether what remains is still a whole lap is
-    # not decided here: resample_to_grid refuses samples that do not span the
-    # track, and that guard is the one that has to hold anyway.
-    resets = np.flatnonzero(np.diff(distance) < -0.5 * track_length_m)
-    opening = resets[elapsed[resets + 1] <= RESET_GRACE_S]
-    if len(opening):
-        start = int(opening[-1]) + 1
-        distance, elapsed = distance[start:], elapsed[start:] - elapsed[start]
-        resets = np.flatnonzero(np.diff(distance) < -0.5 * track_length_m)
-    if len(resets):
-        end = int(resets[0]) + 1
-        distance, elapsed = distance[:end], elapsed[:end]
+    own = one_lap_slice(distance, hz, track_length_m,
+        RESET_GRACE_S,
+    )
+    distance = distance[own]
+    if len(distance) < 2:
+        raise TraceError(f"lap {lap.number}: no samples between its own crossings")
+
+    # Time stays measured from the start of the *window*, not from the trimmed
+    # start. Every other channel is read over the same window, and shifting
+    # only this one would slide the distance axis against them by up to the
+    # grace period - 2 s, which at 83 m/s is 166 m of track. The lap's own zero
+    # is restored at the end of _time_axis instead.
+    elapsed = (np.arange(len(distance), dtype=np.float64) + own.start) / hz
 
     distance = np.maximum.accumulate(distance)
     # Keep the first time each distance is reached: a stall contributes no new
@@ -138,7 +124,8 @@ def _on_grid(
     if name not in file.channels:
         raise TraceError(f"{file.path.name}: no channel {name!r}")
 
-    values = np.asarray(session.lap_channel(lap, name), dtype=np.float64)
+    raw, _offset = session.lap_channel_from_crossing(lap, name, RESET_GRACE_S)
+    values = np.asarray(raw, dtype=np.float64)
     if len(values) < 2:
         raise TraceError(f"lap {lap.number}: only {len(values)} samples of {name!r}")
 
@@ -219,4 +206,7 @@ def _time_axis(lap: Lap, progress, grid: np.ndarray) -> np.ndarray:
             f"lap {lap.number}: time does not advance at {grid[at]:.0f} m - "
             f"the distance samples it was inverted from are not ordered in time"
         )
-    return time_s
+    # Now the lap's own zero: elapsed was kept in the window's frame so the
+    # channel clocks lined up with it, and the window starts up to one grace
+    # period before the car crossed the line.
+    return time_s - time_s[0]

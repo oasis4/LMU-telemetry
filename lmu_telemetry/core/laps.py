@@ -94,6 +94,59 @@ def _recorded_lap_time(lap_time_events, t_end: float) -> float | None:
     return float(values[closest])
 
 
+#: How far either side of a lap's boundary its own distance reset may sit, in
+#: seconds.
+#:
+#: A lap boundary is an event timestamp while ``Lap Dist`` is sampled at 10 Hz,
+#: so the window rounds outwards - but in some sessions the ``Lap`` event fires
+#: a good deal later than the car crossed the line. Measured over the working
+#: set, the position samples of about 30 % of clean laps begin 100-115 m into
+#: the lap, which is the ~1.3 s by which the event lagged. Those metres are
+#: not missing: they sit at the end of the previous lap's window. So the
+#: position of a lap is read from a window opened this much early, and trimmed
+#: back to the reset - real samples rather than an interpolated straight line.
+RESET_GRACE_S = 2.0
+
+
+def one_lap_slice(
+    distance: np.ndarray,
+    frequency_hz: int,
+    track_length_m: float,
+    lookback_s: float = 0.0,
+) -> slice:
+    """The samples of *distance* that belong to this lap and no other.
+
+    A lap is bounded by two crossings of the start/finish line and ``Lap Dist``
+    resets at a crossing, so both resets can fall inside the window: the
+    opening one just after it starts, the closing one just before it ends.
+    The samples outside them belong to the neighbouring laps.
+
+    Every caller that reads a lap's position has to do this, and one of them
+    not doing it is not a small error. ``assess_lap`` sorted the raw samples by
+    distance instead, which put the *next* lap's samples - values near zero -
+    at the front. The lap then appeared to span the whole track when its own
+    samples began 144 m in, and the racing line it contributed to the
+    reference model was stitched from two laps across the start/finish line.
+    """
+    if len(distance) < 2:
+        return slice(0, len(distance))
+    resets = np.flatnonzero(np.diff(distance) < -0.5 * track_length_m)
+    if len(resets) == 0:
+        return slice(0, len(distance))
+
+    # *lookback_s* is how much of the window sits before the lap's own start,
+    # so the opening reset may be that much earlier still. Leaving it out puts
+    # the reset exactly on the boundary of the allowance and the slice then
+    # keeps the *previous* lap instead of this one.
+    grace_samples = (RESET_GRACE_S + lookback_s) * frequency_hz
+    opening = resets[resets + 1 <= grace_samples]
+    start = int(opening[-1]) + 1 if len(opening) else 0
+
+    after_start = resets[resets >= start]
+    stop = int(after_start[0]) + 1 if len(after_start) else len(distance)
+    return slice(start, max(stop, start))
+
+
 def segment_laps(tf, timebase: TimeBase) -> list[Lap]:
     """Return every lap that is bounded by two consecutive ``Lap`` events."""
     events = tf.events("Lap")

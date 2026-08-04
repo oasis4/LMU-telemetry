@@ -118,6 +118,25 @@ class Session:
             return None
         return min(candidates, key=lambda l: l.duration_s)
 
+    def lap_channel_from_crossing(
+        self, lap: Lap, name: str, lookback_s: float
+    ) -> "tuple[np.ndarray, float]":
+        """*name* over the lap, opened *lookback_s* early, with that offset.
+
+        Returns ``(values, offset_s)`` where *offset_s* is how far before the
+        lap's own start the first sample sits - so every channel read this way
+        shares one clock origin, and callers can put the lap's zero back.
+
+        Position is read this way because a ``Lap`` event can fire well after
+        the car crossed the line: in about 30 % of the working set's clean laps
+        the lap's own window begins 100-115 m in. Those metres exist, at the
+        end of the previous lap's window; reading them is the difference
+        between measuring the track and interpolating across it.
+        """
+        start = max(lap.t_start - lookback_s, self._timebase.t0)
+        values = self._timebase.channel_window(self._file, name, start, lap.t_end)
+        return values, float(lap.t_start - start)
+
     def lap_channel(self, lap: Lap, name: str) -> np.ndarray:
         """The slice of *name* covering *lap*, in canonical units.
 
