@@ -19,12 +19,32 @@ GRID_STEP_M = 2.0
 _EARTH_RADIUS_M = 6378137.0
 
 
-def project_enu(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Project degrees onto local metres, centred on the mean position."""
+def project_enu(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    origin: tuple[float, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project degrees onto local metres around *origin*, a ``(lat0, lon0)`` pair.
+
+    With ``origin=None`` the projection is centred on the mean of the arrays
+    handed in. That is safe only for a caller that looks at one array at a
+    time, because everything derived from a single line here - curvature, the
+    closure integral - is translation-invariant and therefore indifferent to
+    where the frame sits.
+
+    It is **not** safe for a caller that compares or combines several arrays:
+    centring each one on its own mean puts every one of them in a different
+    frame. Measured on the corpus, the per-lap means of Monza's 135 clean laps
+    span 112.6 m in x and 165.0 m in y - on a track about 12 m wide. Such
+    callers must choose one origin up front and pass it for every array.
+    """
     lat = np.asarray(lat, dtype=np.float64)
     lon = np.asarray(lon, dtype=np.float64)
-    lat0 = float(np.mean(lat))
-    x = np.radians(lon - float(np.mean(lon))) * _EARTH_RADIUS_M * np.cos(np.radians(lat0))
+    if origin is None:
+        lat0, lon0 = float(np.mean(lat)), float(np.mean(lon))
+    else:
+        lat0, lon0 = float(origin[0]), float(origin[1])
+    x = np.radians(lon - lon0) * _EARTH_RADIUS_M * np.cos(np.radians(lat0))
     y = np.radians(lat - lat0) * _EARTH_RADIUS_M
     return x, y
 

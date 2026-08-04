@@ -34,6 +34,35 @@ def test_projection_is_centred_on_the_data():
     assert np.mean(y) == pytest.approx(0.0, abs=1e-6)
 
 
+def test_an_explicit_origin_is_used_instead_of_the_data_mean():
+    lat = np.array([60.0, 60.001])
+    lon = np.array([0.0, 0.0])
+    x, y = project_enu(lat, lon, origin=(60.0, 0.0))
+    assert y[0] == pytest.approx(0.0, abs=1e-6)
+    assert y[1] == pytest.approx(111.32, abs=0.5)
+    assert np.mean(y) != pytest.approx(0.0, abs=1.0)  # not re-centred
+
+
+def test_one_origin_keeps_two_arrays_in_one_frame():
+    """Two laps centred on their own means lose their relative offset entirely.
+
+    This is why a median across per-lap frames is not a racing line: the
+    offset between two laps - the thing the median is supposed to average
+    out - is forced to exactly zero before the median ever sees it.
+    """
+    lon = np.array([0.0, 0.0])
+    a_lat = np.array([60.0000, 60.0010])
+    b_lat = np.array([60.0020, 60.0030])  # 222 m north of a
+
+    _, ya = project_enu(a_lat, lon, origin=(60.0, 0.0))
+    _, yb = project_enu(b_lat, lon, origin=(60.0, 0.0))
+    assert (np.mean(yb) - np.mean(ya)) == pytest.approx(222.6, abs=1.0)
+
+    _, ya_own = project_enu(a_lat, lon)
+    _, yb_own = project_enu(b_lat, lon)
+    assert (np.mean(yb_own) - np.mean(ya_own)) == pytest.approx(0.0, abs=1e-6)
+
+
 def test_grid_spans_the_track_at_the_declared_step():
     g = grid_for(1000.0)
     assert g[0] == 0.0

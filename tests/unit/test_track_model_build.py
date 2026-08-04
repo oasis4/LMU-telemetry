@@ -1,12 +1,15 @@
 import numpy as np
 import pytest
 
+from lmu_telemetry.core.quality import clean_laps
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import (
     TrackModel,
+    _lap_line,
     build_track_model,
     load_model,
     save_model,
+    track_origin,
 )
 
 
@@ -18,6 +21,45 @@ def test_model_from_the_reference_fixture(monza_q_file):
     assert model.track_length_m == pytest.approx(5776.08, abs=1.0)
     assert 340.0 <= model.closure_deg <= 380.0
     assert len(model.corners) >= 10
+
+
+def test_a_lap_line_is_placed_by_the_origin_it_is_given(monza_q_file):
+    """The lap's line must sit where the shared origin puts it.
+
+    Re-centring each lap on its own mean would make both calls below return
+    the identical line, so the measured 111 m shift is what pins that every
+    lap of a track really does land in one frame rather than its own.
+    """
+    with Session.open(monza_q_file) as s:
+        length = s.track_length_m
+        lap = clean_laps(s)[0]
+        origin = track_origin([s])
+        here = _lap_line(s, lap, length, origin)
+        north = _lap_line(s, lap, length, (origin[0] + 0.001, origin[1]))
+
+    assert here is not None and north is not None
+    # x moves only through cos(lat0), which barely changes over 0.001 deg.
+    assert np.allclose(here[0], north[0], atol=0.1)
+    assert np.mean(here[1] - north[1]) == pytest.approx(111.3, abs=1.0)
+
+
+def test_the_track_origin_does_not_move_with_where_the_car_spent_its_time(
+    monza_q_file,
+):
+    """The bounding box midpoint is a property of the circuit, not of a lap.
+
+    Building from one lap and from every lap of the session must agree,
+    because both see the same extremes of the same track.
+    """
+    with Session.open(monza_q_file) as s:
+        origin = track_origin([s])
+        lat = s.file.channel("GPS Latitude")
+        lon = s.file.channel("GPS Longitude")
+
+    assert origin[0] == pytest.approx((lat.min() + lat.max()) / 2.0)
+    assert origin[1] == pytest.approx((lon.min() + lon.max()) / 2.0)
+    # It is not the (time-weighted) mean position, which is what would drift.
+    assert origin[0] != pytest.approx(float(lat.mean()), abs=1e-9)
 
 
 def test_a_model_from_too_few_laps_is_flagged_unconfident(monza_q_file):

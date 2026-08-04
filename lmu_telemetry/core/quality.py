@@ -60,6 +60,46 @@ def coverage_reason(d_sorted: np.ndarray, track_length_m: float) -> str | None:
     return None
 
 
+def lap_line_on_grid(
+    session: Session,
+    lap: Lap,
+    track_length_m: float,
+    origin: "tuple[float, float] | None" = None,
+) -> "tuple[tuple[np.ndarray, np.ndarray] | None, str | None]":
+    """One lap's position resampled onto the track's common distance grid.
+
+    Returns ``(line, None)`` or ``(None, reason)``. This is the single
+    project/sort/dedupe/resample pipeline: :func:`assess_lap` runs it to judge
+    a lap, and ``track_model`` runs it again to collect the lap's line, and
+    the two must agree sample for sample or a lap could be admitted on one
+    geometry and measured on another.
+
+    *origin* is handed straight to :func:`geometry.project_enu`. A caller that
+    combines several laps must supply one, or every lap lands in its own frame.
+    """
+    lat = session.lap_channel(lap, "GPS Latitude")
+    lon = session.lap_channel(lap, "GPS Longitude")
+    dist = session.lap_channel(lap, "Lap Dist")
+    n = min(len(lat), len(lon), len(dist))
+    if n < 100:
+        return None, f"only {n} position samples"
+
+    x, y = geometry.project_enu(lat[:n], lon[:n], origin)
+    order = np.argsort(dist[:n])
+    d_sorted = dist[:n][order]
+    keep = np.concatenate(([True], np.diff(d_sorted) > 1e-6))
+    d_sorted = d_sorted[keep]
+
+    reason = coverage_reason(d_sorted, track_length_m)
+    if reason is not None:
+        return None, reason
+
+    return (
+        geometry.resample_to_grid(d_sorted, x[order][keep], track_length_m),
+        geometry.resample_to_grid(d_sorted, y[order][keep], track_length_m),
+    ), None
+
+
 def assess_lap(session: Session, lap: Lap) -> LapQuality:
     """Judge whether *lap* may contribute to the track's reference geometry.
 
@@ -96,24 +136,13 @@ def assess_lap(session: Session, lap: Lap) -> LapQuality:
             f"+-{DISTANCE_TOLERANCE:.2f}"
         )
 
-    lat = session.lap_channel(lap, "GPS Latitude")
-    lon = session.lap_channel(lap, "GPS Longitude")
-    dist = session.lap_channel(lap, "Lap Dist")
-    n = min(len(lat), len(lon), len(dist))
-    if n < 100:
-        return _rejected(f"only {n} position samples")
-
-    x, y = geometry.project_enu(lat[:n], lon[:n])
-    order = np.argsort(dist[:n])
-    d_sorted = dist[:n][order]
-    keep = np.concatenate(([True], np.diff(d_sorted) > 1e-6))
-    d_sorted = d_sorted[keep]
-    reason = coverage_reason(d_sorted, track_length)
-    if reason is not None:
+    # No origin: one lap is judged entirely on its own, and curvature and the
+    # closure integral are both translation-invariant, so this lap's own mean
+    # is as good a frame as any. Callers that combine laps must pass an origin.
+    line, reason = lap_line_on_grid(session, lap, track_length)
+    if line is None:
         return _rejected(reason)
-
-    xs = geometry.resample_to_grid(d_sorted, x[order][keep], track_length)
-    ys = geometry.resample_to_grid(d_sorted, y[order][keep], track_length)
+    xs, ys = line
     grid = geometry.grid_for(track_length)
     closure = geometry.heading_change_deg(geometry.curvature(xs, ys), grid)
 

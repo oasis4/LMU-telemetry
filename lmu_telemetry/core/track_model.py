@@ -18,7 +18,7 @@ import numpy as np
 
 from . import geometry
 from .corners import Corner, detect_corners
-from .quality import clean_laps, coverage_reason
+from .quality import clean_laps, lap_line_on_grid
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,14 @@ def reference_line(lines) -> tuple[np.ndarray, np.ndarray]:
 
     The median rather than the mean: one wild lap should not drag the
     reference geometry with it.
+
+    **Every line must already be in one common frame.** A per-sample median
+    across lines that sit in different coordinate frames is not a racing line
+    at all - it picks, for each sample, whichever lap happens to be shifted
+    into the middle, so a lap with an outlying frame is structurally excluded
+    from contributing rather than outvoted. That is the exact opposite of what
+    the median is here for. ``build_track_model`` guarantees the common frame
+    by choosing one projection origin for the whole track up front.
     """
     lines = list(lines)
     if not lines:
@@ -144,25 +152,43 @@ class TrackModel:
         )
 
 
-def _lap_line(session, lap, track_length_m):
+def _lap_line(session, lap, track_length_m, origin):
     """One lap's racing line on the track's common grid, or None."""
-    lat = session.lap_channel(lap, "GPS Latitude")
-    lon = session.lap_channel(lap, "GPS Longitude")
-    dist = session.lap_channel(lap, "Lap Dist")
-    n = min(len(lat), len(lon), len(dist))
-    if n < 100:
-        return None
-    x, y = geometry.project_enu(lat[:n], lon[:n])
-    order = np.argsort(dist[:n])
-    d = dist[:n][order]
-    keep = np.concatenate(([True], np.diff(d) > 1e-6))
-    d = d[keep]
-    if coverage_reason(d, track_length_m) is not None:
-        return None
-    return (
-        geometry.resample_to_grid(d, x[order][keep], track_length_m),
-        geometry.resample_to_grid(d, y[order][keep], track_length_m),
-    )
+    line, _reason = lap_line_on_grid(session, lap, track_length_m, origin)
+    return line
+
+
+def track_origin(sessions) -> "tuple[float, float]":
+    """One projection origin for the whole track: the bounding box midpoint.
+
+    Chosen before any lap is projected, because every lap of the track has to
+    land in the same frame for :func:`reference_line` to mean anything.
+
+    The midpoint of the combined bounding box rather than a mean position: a
+    mean is time-weighted, so it drifts with where the car spent its time -
+    which is exactly what differs between laps and between sessions. The
+    bounding box depends only on how far the *track* reaches in each
+    direction, which is a property of the circuit and identical for every lap
+    of it. Nothing downstream cares where the origin sits (curvature, corner
+    detection and the closure integral are all translation-invariant); what
+    they care about is that it is the same one for every lap, and that
+    rebuilding the same track tomorrow picks the same one again.
+    """
+    lo_lat = lo_lon = float("inf")
+    hi_lat = hi_lon = float("-inf")
+    for session in sessions:
+        lat = session.file.channel("GPS Latitude")
+        lon = session.file.channel("GPS Longitude")
+        if len(lat) == 0 or len(lon) == 0:
+            continue
+        lo_lat, hi_lat = min(lo_lat, float(lat.min())), max(hi_lat, float(lat.max()))
+        lo_lon, hi_lon = min(lo_lon, float(lon.min())), max(hi_lon, float(lon.max()))
+    if lo_lat == float("inf"):
+        # No positions anywhere. There is nothing to project, but returning a
+        # usable origin keeps the caller's lap loop on one code path; every
+        # lap will be rejected for want of samples regardless.
+        return (0.0, 0.0)
+    return ((lo_lat + hi_lat) / 2.0, (lo_lon + hi_lon) / 2.0)
 
 
 def build_track_model(sessions) -> "TrackModel | None":
@@ -205,10 +231,13 @@ def build_track_model(sessions) -> "TrackModel | None":
                 f"different layouts sharing one name"
             )
 
+    # One frame for the whole track, fixed before the first lap is projected.
+    origin = track_origin(sessions)
+
     lines = []
     for session in sessions:
         for lap in clean_laps(session):
-            line = _lap_line(session, lap, track_length)
+            line = _lap_line(session, lap, track_length, origin)
             if line is not None:
                 lines.append(line)
     if not lines:
