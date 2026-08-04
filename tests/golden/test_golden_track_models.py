@@ -22,7 +22,13 @@ APEX_TOLERANCE_M = 60.0
 
 @pytest.fixture(scope="module")
 def models(corpus_files):
-    """One model per track, built from every clean lap in the corpus."""
+    """One model per track identity, built from every clean lap in the corpus.
+
+    Keyed by ``TrackKey.slug()``, because a track is not an identity: LMU
+    ships two Monza layouts and two each at Sebring and Le Mans, and they are
+    different circuits that happen to share a name. Keying by track name would
+    make one of each pair overwrite the other.
+    """
     grouped = defaultdict(list)
     open_sessions = []
     try:
@@ -37,27 +43,27 @@ def models(corpus_files):
             model = build_track_model(sessions)
             if model is None:
                 continue
-            assert key.track not in out, (
-                f"{key.track} produced two track identities: {key} and "
-                f"{out[key.track].key} - a single track must not split"
-            )
-            out[key.track] = model
+            assert key.slug() not in out, f"{key} produced two models"
+            out[key.slug()] = model
         return out
     finally:
         for s in open_sessions:
             s.close()
 
 
-@pytest.mark.parametrize("track", sorted(GOLDEN))
-def test_track_model_matches_the_frozen_reference(models, track):
-    expected = GOLDEN[track]
-    assert track in models, f"no model built for {track}"
-    model = models[track]
+@pytest.mark.parametrize("slug", sorted(GOLDEN))
+def test_track_model_matches_the_frozen_reference(models, slug):
+    expected = GOLDEN[slug]
+    assert slug in models, f"no model built for {expected['track']} / {expected['layout']}"
+    model = models[slug]
 
     assert model.track_length_m == pytest.approx(expected["track_length_m"], abs=2.0)
-    assert model.closure_deg == pytest.approx(expected["closure_deg"], abs=10.0)
+    # A lap that goes round once turns exactly 360 degrees, and the reference
+    # line is a median of such laps. This is a tight bound on purpose: the
+    # loose one it replaces hid a bias that grew with how much a track turned.
+    assert model.closure_deg == pytest.approx(360.0, abs=0.5)
     assert len(model.corners) == expected["corner_count"], (
-        f"{track}: expected {expected['corner_count']} corners, "
+        f"{slug}: expected {expected['corner_count']} corners, "
         f"got {len(model.corners)} at {[round(c.apex_m) for c in model.corners]}"
     )
 
@@ -68,7 +74,7 @@ def test_track_model_matches_the_frozen_reference(models, track):
         model.corners, expected["apex_m"], expected["names"]
     ):
         assert corner.apex_m == pytest.approx(apex, abs=APEX_TOLERANCE_M), (
-            f"{track} {name}: apex moved from {apex} to {corner.apex_m:.0f} m"
+            f"{slug} {name}: apex moved from {apex} to {corner.apex_m:.0f} m"
         )
         assert corner.name == name
 
@@ -76,7 +82,20 @@ def test_track_model_matches_the_frozen_reference(models, track):
 def test_monza_curva_grande_is_one_corner(models):
     """The regression this design was corrected for: prominence-based
     splitting halved this bend into two corners."""
-    corners = models["Autodromo Nazionale Monza"].corners
+    corners = models["autodromo-nazionale-monza--autodromo-nazionale-monza"].corners
     grande = [c for c in corners if 1250 < c.apex_m < 1750]
     assert len(grande) == 1
     assert grande[0].radius_m > 150.0
+
+
+def test_two_layouts_of_one_track_are_two_models(models):
+    """Monza's full circuit and its Curva Grande layout are different tracks.
+
+    They share a name and 5.7 km of length, so a model keyed on the track name
+    alone would serve one where the other was asked for - and every corner
+    position would be wrong by however much the layouts diverge.
+    """
+    full = models["autodromo-nazionale-monza--autodromo-nazionale-monza"]
+    junior = models["autodromo-nazionale-monza--monza-curva-grande-circuit"]
+    assert full.key.layout != junior.key.layout
+    assert len(full.corners) != len(junior.corners)

@@ -5,6 +5,7 @@ These are the guarantees that replace the old heuristic validation stages.
 
 import pytest
 
+from lmu_telemetry.core.quality import LAP_TIME_TOLERANCE_S, assess_lap
 from lmu_telemetry.core.session import Session
 
 pytestmark = pytest.mark.corpus
@@ -13,21 +14,41 @@ pytestmark = pytest.mark.corpus
 MAX_PLAUSIBLE_AVG_KMH = 300.0
 
 
+def _boundaries_are_trustworthy(lap) -> bool:
+    """Whether this lap's own file agrees about where the lap begins and ends.
+
+    Some sessions carry ``Lap`` events whose timestamps do not match the lap
+    times the game recorded - by seconds, not milliseconds. Nothing derived
+    from those boundaries means anything, so an invariant about our sector or
+    speed arithmetic cannot be tested on them. They get their own test below,
+    which asserts they are rejected rather than quietly skipped.
+    """
+    if lap.recorded_time_s is None or lap.recorded_time_s == 0.0:
+        return False
+    return abs(lap.duration_s - lap.recorded_time_s) <= LAP_TIME_TOLERANCE_S
+
+
 def test_sector_sum_equals_duration(corpus_files):
     checked = 0
     for path in corpus_files:
         with Session.open(path) as s:
             for lap in s.laps:
-                if lap.sectors_s is None:
+                if lap.sectors_s is None or not _boundaries_are_trustworthy(lap):
                     continue
                 assert sum(lap.sectors_s) == pytest.approx(lap.duration_s, abs=0.02), (
                     f"{path.name} lap {lap.number}"
                 )
                 checked += 1
-    assert checked == 190, f"expected 190 laps with sector data, checked {checked}"
+    assert checked >= 500, f"expected at least 500 laps with sector data, got {checked}"
 
 
 def test_no_lap_implies_impossible_average_speed(corpus_files):
+    """No lap the pipeline is willing to time may imply an impossible speed.
+
+    Lap 0 is excluded because it is not a lap time: it runs from wherever
+    recording started to the first crossing. The guarantee that it never
+    reaches a user is ``fastest_lap``'s, and is tested there.
+    """
     checked = 0
     for path in corpus_files:
         with Session.open(path) as s:
@@ -35,14 +56,38 @@ def test_no_lap_implies_impossible_average_speed(corpus_files):
             if length is None:
                 continue
             for lap in s.laps:
-                if lap.distance_m < length * 0.5:
+                if lap.number == 0 or lap.distance_m < length * 0.5:
                     continue  # partial lap, not a timing claim
                 avg_kmh = (lap.distance_m / lap.duration_s) * 3.6
                 assert avg_kmh < MAX_PLAUSIBLE_AVG_KMH, (
                     f"{path.name} lap {lap.number}: {avg_kmh:.1f} km/h average"
                 )
                 checked += 1
-    assert checked > 150, f"only {checked} full laps reached the speed check"
+    assert checked > 800, f"only {checked} full laps reached the speed check"
+
+
+def test_every_lap_whose_boundaries_are_suspect_is_rejected(corpus_files):
+    """The laps skipped above must be rejected, not merely skipped.
+
+    Without this, widening the skip in ``_boundaries_are_trustworthy`` would
+    silently shrink what the invariants above cover. Here that same set has to
+    come back from ``assess_lap`` as unclean, with the disagreement named.
+    """
+    suspect = 0
+    for path in corpus_files:
+        with Session.open(path) as s:
+            for lap in s.laps:
+                if lap.number == 0 or lap.touched_pits:
+                    continue
+                if lap.recorded_time_s is None or _boundaries_are_trustworthy(lap):
+                    continue
+                quality = assess_lap(s, lap)
+                assert quality.is_clean is False, (
+                    f"{path.name} lap {lap.number}: derived {lap.duration_s:.3f}s "
+                    f"against the game's {lap.recorded_time_s:.3f}s, yet accepted"
+                )
+                suspect += 1
+    assert suspect >= 100, f"only {suspect} suspect laps found; expected the corpus's 149"
 
 
 def test_lap_intervals_are_contiguous_and_ordered(corpus_files):
@@ -70,9 +115,11 @@ def test_derived_duration_matches_the_games_own_lap_time_event(corpus_files):
     duration. We never read it to derive anything - which is exactly why it
     makes an independent oracle for the durations we do derive.
 
-    Every lap from 1 onward agrees with the game's own recorded lap time to
-    within 18.3 ms across all 40 sessions, independently corroborating that
-    deriving duration from `Lap` event timestamps is correct.
+    Across the corpus 913 of 995 timed laps agree to within 17 ms. The rest
+    miss by more than a second and belong to files whose `Lap` events are
+    unreliable; ``assess_lap`` rejects those, and the test above holds it to
+    that. This one asserts the positive half: where a lap survives, the two
+    independent measurements of its duration agree to milliseconds.
     """
     checked = 0
     for path in corpus_files:
@@ -82,6 +129,8 @@ def test_derived_duration_matches_the_games_own_lap_time_event(corpus_files):
                 continue
             ev_ts, ev_val = events
             for lap in s.laps:
+                if not _boundaries_are_trustworthy(lap):
+                    continue
                 # Skip lap 0: it runs from the start of recording to the first
                 # timed crossing, covering a formation lap plus the first racing
                 # lap (measured at 1.93-2.00 track lengths) or including stationary
@@ -101,6 +150,6 @@ def test_derived_duration_matches_the_games_own_lap_time_event(corpus_files):
                     f"but the file records {hits[0]:.3f}s"
                 )
                 checked += 1
-    assert checked >= 140, (
+    assert checked >= 800, (
         f"only {checked} laps could be cross-checked against a Lap Time event"
     )

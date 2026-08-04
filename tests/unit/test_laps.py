@@ -70,13 +70,18 @@ def test_no_lap_in_the_corpus_is_physically_impossible(corpus_files):
             laps = segment_laps(tf, TimeBase.from_file(tf))
             track_len = float(tf.channel("Lap Dist").max()) if laps else 0.0
         for lap in laps:
+            # Lap 0 spans from the start of recording to the first crossing,
+            # so it is a fragment of a lap rather than a slow one, and no
+            # floor derived from the track length applies to it.
+            if lap.number == 0:
+                continue
             floor = track_len / max_speed_ms
             assert lap.duration_s >= floor, (
                 f"{path.name} lap {lap.number}: {lap.duration_s:.2f}s "
                 f"is below the {floor:.2f}s physical floor"
             )
             checked += 1
-    assert checked == 206, f"expected 206 complete laps in the corpus, checked {checked}"
+    assert checked >= 900, f"only {checked} complete laps reached the floor check"
 
 
 def test_missing_lap_dist_channel_raises_rather_than_returning_zero():
