@@ -94,9 +94,18 @@ def lap_line_on_grid(
     if reason is not None:
         return None, reason
 
+    # coverage_reason has just established that these samples reach both ends
+    # of the grid to within DISTANCE_TOLERANCE. That same allowance is handed
+    # to resample_to_grid rather than left for it to infer, so the guard there
+    # rejects exactly what was not admitted here and nothing more.
+    tolerance_m = track_length_m * DISTANCE_TOLERANCE
     return (
-        geometry.resample_to_grid(d_sorted, x[order][keep], track_length_m),
-        geometry.resample_to_grid(d_sorted, y[order][keep], track_length_m),
+        geometry.resample_to_grid(
+            d_sorted, x[order][keep], track_length_m, tolerance_m=tolerance_m
+        ),
+        geometry.resample_to_grid(
+            d_sorted, y[order][keep], track_length_m, tolerance_m=tolerance_m
+        ),
     ), None
 
 

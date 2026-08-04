@@ -3,7 +3,14 @@ import json
 import pytest
 
 from lmu_telemetry.core.corners import Corner
-from lmu_telemetry.core.naming import _DATA_DIR, _slug, apply_names, load_names
+from lmu_telemetry.core.naming import (
+    NAME_SANITY_M,
+    _DATA_DIR,
+    _slug,
+    _tolerances,
+    apply_names,
+    load_names,
+)
 
 
 def _corner(index: int, apex_m: float) -> Corner:
@@ -92,16 +99,72 @@ def test_structural_mismatch_falls_back_for_all_corners():
 
 def test_legitimate_drift_still_names_correctly():
     """46 m is the measured worst-case apex drift across clean-lap set
-    changes (Algarve); it must still resolve to the curated name."""
+    changes (Algarve); it must still resolve to the curated name.
+
+    Applied to Curva Grande, whose neighbouring entries are several hundred
+    metres away, so the drift stays well inside what the pairing supports.
+    """
     track = "Autodromo Nazionale Monza"
     apexes = _table_apex_values(track)
     entries = load_names(track)
-    apexes[0] = apexes[0] + 46.0
+    grande = [e.name for e in entries].index("Curva Grande")
+    apexes[grande] = apexes[grande] + 46.0
     corners = [_corner(i + 1, apex) for i, apex in enumerate(apexes)]
 
     named = apply_names(corners, track)
 
     assert [c.name for c in named] == [e.name for e in entries]
+
+
+def test_a_shift_inside_a_tight_cluster_invalidates_the_match():
+    """The same 46 m drift is not legitimate inside a chicane.
+
+    Monza's two Variante del Rettifilo entries are 40 m apart, so a corner
+    displaced by 46 m sits closer to its neighbour's entry than to its own -
+    the order-based pairing no longer has anything supporting it, and a
+    single table-wide 150 m tolerance would have accepted it regardless.
+    """
+    track = "Autodromo Nazionale Monza"
+    apexes = _table_apex_values(track)
+    assert abs(apexes[1] - apexes[0]) < 46.0, "this test needs a tight cluster"
+    apexes[0] = apexes[0] + 46.0
+    corners = [_corner(i + 1, apex) for i, apex in enumerate(apexes)]
+
+    named = apply_names(corners, track)
+
+    assert [c.name for c in named] == [f"T{i + 1}" for i in range(len(corners))]
+
+
+def test_the_tolerance_of_a_clustered_entry_is_half_its_nearest_gap():
+    """Stated directly, so the clamp is pinned and not merely implied."""
+    entries = load_names("Autodromo Nazionale Monza")
+    tolerances = _tolerances(entries)
+
+    assert len(tolerances) == len(entries)
+    gap = abs(entries[1].apex_m - entries[0].apex_m)
+    assert tolerances[0] == pytest.approx(gap / 2.0)
+    assert tolerances[1] == pytest.approx(gap / 2.0)
+    # An entry with no near neighbour keeps the table-wide bound.
+    isolated = max(range(len(entries)), key=lambda i: tolerances[i])
+    assert tolerances[isolated] == NAME_SANITY_M
+    assert all(t <= NAME_SANITY_M for t in tolerances)
+
+
+@pytest.mark.parametrize(
+    "track",
+    ["Autodromo Nazionale Monza", "Circuit de la Sarthe", "Algarve International Circuit"],
+)
+def test_no_shipped_entry_is_closer_to_a_neighbour_than_its_own_tolerance(track):
+    """Every shipped table stays within what its own spacing can support."""
+    entries = load_names(track)
+    for i, tolerance in enumerate(_tolerances(entries)):
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(entries):
+                gap = abs(entries[i].apex_m - entries[j].apex_m)
+                assert tolerance <= gap / 2.0, (
+                    f"{track} entry {i} ({entries[i].name}) tolerates {tolerance} m "
+                    f"but sits {gap} m from {entries[j].name}"
+                )
 
 
 def test_portimao_horseshoe_carries_two_official_turn_numbers():

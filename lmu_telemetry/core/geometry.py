@@ -63,8 +63,27 @@ def resample_to_grid(
     values: np.ndarray,
     track_length_m: float,
     step_m: float = GRID_STEP_M,
+    tolerance_m: float = 0.0,
 ) -> np.ndarray:
-    """Resample *values* from *distance* onto the track's common grid."""
+    """Resample *values* from *distance* onto the track's common grid.
+
+    Raises ``ValueError`` when *distance* does not reach both ends of that
+    grid. This function interpolates with ``np.interp``, which extends the
+    first and last value flat outside the input range rather than failing, so
+    an under-spanning input silently comes back as a real-looking line with
+    invented ends - and a lap's curvature and closure are then measured off
+    that invention. The hazard belongs to this function, so the check does
+    too; a caller that forgets it should not be the only thing standing
+    between a short array and a fabricated result.
+
+    *tolerance_m* is how far the input may fall short at either end, which is
+    a policy the caller owns and this function should not guess. It defaults
+    to zero - the strict reading - so a caller has to say so deliberately.
+    ``quality.lap_line_on_grid`` passes the same allowance it admitted the lap
+    under, because samples do not land exactly on the grid's ends: measured
+    over the corpus, 90 of Monza's 135 clean laps begin after d=0 (by up to
+    5.4 m) and 122 end before the last grid point (by up to 8.8 m).
+    """
     distance = np.asarray(distance, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64)
     if len(distance) != len(values):
@@ -75,7 +94,14 @@ def resample_to_grid(
         raise ValueError("need at least two samples to resample")
     if np.any(np.diff(distance) < 0):
         raise ValueError("distance must be non-decreasing")
-    return np.interp(grid_for(track_length_m, step_m), distance, values)
+    grid = grid_for(track_length_m, step_m)
+    if distance[0] > grid[0] + tolerance_m or distance[-1] < grid[-1] - tolerance_m:
+        raise ValueError(
+            f"samples span {distance[0]:.1f}-{distance[-1]:.1f} m, which does "
+            f"not cover the grid {grid[0]:.1f}-{grid[-1]:.1f} m within "
+            f"{tolerance_m:.1f} m; interpolating would invent the ends"
+        )
+    return np.interp(grid, distance, values)
 
 
 #: Smoothing window for the racing line, in grid samples (15 x 2 m = 30 m).

@@ -28,6 +28,11 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "tracks"
 #: merged corner shifts an apex by several hundred metres. 150 m sits
 #: comfortably between the two, so it separates legitimate drift from a
 #: genuine structural mismatch.
+#:
+#: This is an upper bound only - see :func:`_tolerances`. It says nothing
+#: about how far apart a table's own entries are, and several shipped
+#: clusters are far tighter than 150 m: Monza's Variante del Rettifilo is two
+#: entries 40 m apart, Le Mans' Ford Chicane the same.
 NAME_SANITY_M = 150.0
 
 
@@ -56,6 +61,30 @@ def load_names(track: str) -> "tuple[CornerName, ...] | None":
     )
 
 
+def _tolerances(entries: "tuple[CornerName, ...]") -> list[float]:
+    """How far each entry's apex may drift before the match stops meaning much.
+
+    ``NAME_SANITY_M`` alone ignores how far apart the table's own entries are,
+    and a chicane's entries sit far closer together than that: Monza's
+    Variante del Rettifilo is 40 m from entry 1 to entry 2. A 150 m allowance
+    inside a 40 m cluster is not a sanity check at all - a detected apex could
+    sit nearer to the neighbouring entry than to its own and still be
+    accepted, which is precisely the mix-up the check exists to catch.
+
+    So each entry is additionally held to half the distance to its nearest
+    neighbour in the table. Half, because that is the point at which a
+    detected apex stops being closer to its own entry than to the next one:
+    beyond it, the order-based pairing no longer has anything supporting it.
+    """
+    out = []
+    for i, entry in enumerate(entries):
+        neighbours = entries[max(i - 1, 0) : i] + entries[i + 1 : i + 2]
+        gaps = [abs(entry.apex_m - other.apex_m) for other in neighbours]
+        limit = min(gaps) / 2.0 if gaps else NAME_SANITY_M
+        out.append(min(NAME_SANITY_M, limit))
+    return out
+
+
 def apply_names(corners: list[Corner], track: str) -> list[Corner]:
     """Return *corners* with curated names, matched to the table by order.
 
@@ -65,13 +94,16 @@ def apply_names(corners: list[Corner], track: str) -> list[Corner]:
     describes this geometry. If the corner counts disagree, or a paired
     apex has drifted further than legitimate drift explains, every corner
     keeps its generic name rather than risking a half-correct naming.
+
+    How much drift counts as legitimate is per entry, not one figure for the
+    whole table: see :func:`_tolerances`.
     """
     entries = load_names(track)
     if not entries:
         return list(corners)
     if len(entries) != len(corners):
         return list(corners)
-    for entry, corner in zip(entries, corners):
-        if abs(entry.apex_m - corner.apex_m) > NAME_SANITY_M:
+    for entry, corner, tolerance in zip(entries, corners, _tolerances(entries)):
+        if abs(entry.apex_m - corner.apex_m) > tolerance:
             return list(corners)
     return [replace(corner, name=entry.name) for entry, corner in zip(entries, corners)]

@@ -83,3 +83,29 @@ def test_resampling_rejects_unsorted_distance():
     v = np.array([0.0, 20.0, 10.0])
     with pytest.raises(ValueError):
         resample_to_grid(d, v, track_length_m=200.0, step_m=50.0)
+
+
+def test_resampling_rejects_input_that_stops_short_of_the_grid():
+    """np.interp would extend the last value flat and invent the end."""
+    d = np.array([0.0, 50.0, 100.0])
+    v = np.array([0.0, 5.0, 10.0])
+    with pytest.raises(ValueError, match="does not cover the grid"):
+        resample_to_grid(d, v, track_length_m=400.0, step_m=50.0)
+
+
+def test_resampling_rejects_input_that_starts_after_the_grid():
+    d = np.array([100.0, 150.0, 200.0])
+    v = np.array([10.0, 15.0, 20.0])
+    with pytest.raises(ValueError, match="does not cover the grid"):
+        resample_to_grid(d, v, track_length_m=200.0, step_m=50.0)
+
+
+def test_resampling_accepts_a_shortfall_inside_the_stated_tolerance():
+    """Real samples do not land exactly on the grid's ends, so the caller
+    states how far short they may fall - it is not this function's guess."""
+    d = np.array([2.0, 100.0, 148.0])
+    v = np.array([0.0, 10.0, 20.0])
+    with pytest.raises(ValueError):
+        resample_to_grid(d, v, track_length_m=200.0, step_m=50.0)
+    out = resample_to_grid(d, v, track_length_m=200.0, step_m=50.0, tolerance_m=5.0)
+    assert len(out) == 4

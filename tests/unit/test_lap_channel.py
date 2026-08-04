@@ -46,11 +46,28 @@ def test_cached_channel_cannot_be_mutated_by_a_caller(monza_q_file):
             a[0] = 12345.0
 
 
-def test_last_lap_window_is_clamped_to_the_recording(monza_q_file):
-    """The final lap can end after the last sample; that must truncate, not raise."""
+def test_a_lap_window_running_past_the_recording_is_clamped(monza_q_file):
+    """A lap window may end after the last sample; that must truncate, not raise.
+
+    The assertion is against the *unclamped* index span, not against the
+    channel length: len(slice) <= len(channel) is true of any numpy slice
+    whether or not anything clamps it, so it cannot fail and pins nothing.
+
+    The reference session's own final lap ends inside the recording, so the
+    overrun is constructed rather than assumed - otherwise the test would
+    only be asserting that a window which fits, fits.
+    """
+    from dataclasses import replace
+
     with Session.open(monza_q_file) as s:
-        last = s.laps[-1]
+        spec = s.file.channels.require("Lap Dist")
         values = s.file.channel("Lap Dist")
-        dist = s.lap_channel(last, "Lap Dist")
-    assert len(dist) > 0
-    assert len(dist) <= len(values)
+        overrun = replace(s.laps[-1], t_end=s.laps[-1].t_end + 60.0)
+        i0 = s.timebase.index_at(overrun.t_start, spec.frequency_hz)
+        i1 = s.timebase.index_at(overrun.t_end, spec.frequency_hz)
+        dist = s.lap_channel(overrun, "Lap Dist")
+
+    assert i1 > len(values)             # the window genuinely runs off the end
+    assert len(dist) > 0                # and is not thrown away wholesale
+    assert len(dist) < i1 - i0          # the clamp shortened it
+    assert len(dist) == len(values) - i0  # to exactly what was recorded
