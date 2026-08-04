@@ -18,7 +18,7 @@ import numpy as np
 
 from . import geometry
 from .corners import Corner, detect_corners
-from .quality import clean_laps
+from .quality import clean_laps, coverage_reason
 
 #: Track length is bucketed to this resolution before it enters the identity,
 #: so lap-to-lap scatter (Le Mans: 13619.4-13621.8 m) does not split a track
@@ -143,7 +143,7 @@ def _lap_line(session, lap, track_length_m):
     d = dist[:n][order]
     keep = np.concatenate(([True], np.diff(d) > 1e-6))
     d = d[keep]
-    if len(d) < 50 or d[-1] - d[0] < track_length_m * 0.9:
+    if coverage_reason(d, track_length_m) is not None:
         return None
     return (
         geometry.resample_to_grid(d, x[order][keep], track_length_m),

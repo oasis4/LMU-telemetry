@@ -40,6 +40,26 @@ def _rejected(reason: str, closure: float | None = None) -> LapQuality:
     return LapQuality(is_clean=False, reason=reason, closure_deg=closure)
 
 
+def coverage_reason(d_sorted: np.ndarray, track_length_m: float) -> str | None:
+    """Why these distance samples cannot represent a full lap, or None.
+
+    Resampling onto the track grid uses np.interp, which flat-extrapolates
+    silently outside the sample range rather than failing. So the samples must
+    actually reach both ends of the grid they will be resampled onto - and that
+    grid is not always built from the same track length the lap was admitted
+    against, because a multi-session model resamples onto the median length.
+    """
+    if len(d_sorted) < 50:
+        return f"only {len(d_sorted)} distinct distance samples"
+    span_tolerance = track_length_m * DISTANCE_TOLERANCE
+    if d_sorted[0] > span_tolerance or d_sorted[-1] < track_length_m - span_tolerance:
+        return (
+            f"position samples span {d_sorted[0]:.0f}-{d_sorted[-1]:.0f} m, "
+            f"which does not cover the {track_length_m:.0f} m track"
+        )
+    return None
+
+
 def assess_lap(session: Session, lap: Lap) -> LapQuality:
     """Judge whether *lap* may contribute to the track's reference geometry.
 
@@ -88,15 +108,9 @@ def assess_lap(session: Session, lap: Lap) -> LapQuality:
     d_sorted = dist[:n][order]
     keep = np.concatenate(([True], np.diff(d_sorted) > 1e-6))
     d_sorted = d_sorted[keep]
-    if len(d_sorted) < 50:
-        return _rejected("too few distinct distance samples")
-
-    span_tolerance = track_length * DISTANCE_TOLERANCE
-    if d_sorted[0] > span_tolerance or d_sorted[-1] < track_length - span_tolerance:
-        return _rejected(
-            f"position samples span {d_sorted[0]:.0f}-{d_sorted[-1]:.0f} m, "
-            f"which does not cover the {track_length:.0f} m track"
-        )
+    reason = coverage_reason(d_sorted, track_length)
+    if reason is not None:
+        return _rejected(reason)
 
     xs = geometry.resample_to_grid(d_sorted, x[order][keep], track_length)
     ys = geometry.resample_to_grid(d_sorted, y[order][keep], track_length)
