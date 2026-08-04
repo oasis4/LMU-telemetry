@@ -1,14 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import SessionLoader from './views/SessionLoader.vue'
-import SessionDashboard from './views/SessionDashboard.vue'
-import CornerDetail from './views/CornerDetail.vue'
-import CompareView from './views/CompareView.vue'
 
+import CompareView from './views/CompareView.vue'
+import SessionsView from './views/SessionsView.vue'
+
+// The comparison is the landing page. It is what the tool is for, and it was
+// the view that did not work.
 const routes = [
-  { path: '/', name: 'sessions', component: SessionLoader },
-  { path: '/session/:sessionId', name: 'dashboard', component: SessionDashboard, props: true },
-  { path: '/session/:sessionId/corner/:cornerId', name: 'corner', component: CornerDetail, props: true },
-  { path: '/compare', name: 'compare', component: CompareView },
+  { path: '/', name: 'compare', component: CompareView },
+  { path: '/recordings', name: 'sessions', component: SessionsView },
 ]
 
 export default createRouter({

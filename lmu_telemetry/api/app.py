@@ -23,7 +23,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..cache.store import ArrayCache, CacheError, source_key
+from ..cache.store import ArrayCache, CacheError, SummaryCache, source_key
 from ..core import Session, build_trace, clean_laps, compare_corners, delta_s
 from ..core.trace import LapTrace, TraceError
 from .decimate import TARGET_POINTS, decimate
@@ -50,7 +50,14 @@ def create_app(
     """Build the application. *recordings_dir* is where sessions are read from."""
     root = Path(recordings_dir) if recordings_dir else Path("data") / "sessions"
     sessions = pool if pool is not None else SessionPool()
-    cache = ArrayCache(Path(cache_dir) if cache_dir else Path(".cache") / "traces")
+    cache_root = Path(cache_dir) if cache_dir else Path(".cache") / "traces"
+    cache = ArrayCache(cache_root)
+    summaries = SummaryCache(cache_root)
+    # Keyed on (path, mtime, size) like the disk cache, so a replaced recording
+    # gets a new key and this never serves the old one. Reading 78 small JSON
+    # files still took 2.5 s on Windows; this is what makes the listing free
+    # after the first request in a process.
+    summary_memo: "dict[str, dict]" = {}
 
     app = FastAPI(title="LMU Telemetry", version="2.0")
     app.add_middleware(
@@ -87,33 +94,61 @@ def create_app(
     def health() -> dict:
         return {"status": "ok", "recordings_dir": str(root), "open_sessions": len(sessions)}
 
+    def _summary(path: Path) -> dict:
+        """One recording's headline facts, from cache when it has them.
+
+        Counting the usable laps costs the whole geometry pipeline for every
+        lap of the recording. Over 78 recordings that measured 9.3 s - on the
+        page a user lands on. It depends only on the recording, so it is
+        cached under the same (path, mtime, size) key as everything else.
+        """
+        try:
+            key = source_key(path)
+        except OSError:
+            key = None
+        if key is not None:
+            remembered = summary_memo.get(key)
+            if remembered is not None:
+                return remembered
+            cached = summaries.load(key, "session")
+            if cached is not None:
+                summary_memo[key] = cached
+                return cached
+
+        session = sessions.get(path)
+        info = session.info
+        fastest = session.fastest_lap
+        summary = {
+            "name": path.name,
+            "track": info.track,
+            "layout": info.layout,
+            "car": info.car,
+            "car_class": info.car_class,
+            "driver": info.driver,
+            "session_type": info.session_type,
+            "recorded_at": info.recorded_at,
+            "track_length_m": session.track_length_m,
+            "laps": len(session.laps),
+            "clean_laps": len(clean_laps(session)),
+            "fastest_lap_s": None if fastest is None else round(fastest.duration_s, 3),
+        }
+        if key is not None:
+            summary_memo[key] = summary
+            try:
+                summaries.store(key, "session", summary)
+            except CacheError:
+                pass
+        return summary
+
     @app.get("/api/sessions")
     def list_sessions() -> dict:
         """Every recording, with what it is and how much of it is usable."""
         found = []
         for path in sorted(root.glob("*.duckdb")) if root.is_dir() else []:
             try:
-                session = sessions.get(path)
-                info = session.info
-                usable = clean_laps(session)
-                fastest = session.fastest_lap
+                found.append(_summary(path))
             except Exception as exc:  # noqa: BLE001 - listed with its reason
                 found.append({"name": path.name, "error": str(exc)})
-                continue
-            found.append({
-                "name": path.name,
-                "track": info.track,
-                "layout": info.layout,
-                "car": info.car,
-                "car_class": info.car_class,
-                "driver": info.driver,
-                "session_type": info.session_type,
-                "recorded_at": info.recorded_at,
-                "track_length_m": session.track_length_m,
-                "laps": len(session.laps),
-                "clean_laps": len(usable),
-                "fastest_lap_s": None if fastest is None else round(fastest.duration_s, 3),
-            })
         return {"sessions": found}
 
     @app.get("/api/sessions/{name}/laps")

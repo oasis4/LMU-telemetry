@@ -6,10 +6,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
-        target: 'http://localhost:8001',
-        changeOrigin: true,
-      },
+      // The API is served by `python -m lmu_telemetry.api`, which listens on
+      // 8000. The old config pointed at 8001 and nothing served it.
+      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
     },
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['tests/**/*.test.js'],
   },
 })

@@ -20,6 +20,7 @@ cache: it is a bug that only appears on machines that ran the old version.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -114,7 +115,59 @@ class ArrayCache:
         if not self.directory.is_dir():
             return 0
         removed = 0
-        for path in self.directory.glob("*.npz"):
-            path.unlink(missing_ok=True)
-            removed += 1
+        for pattern in ("*.npz", "*.json"):
+            for path in self.directory.glob(pattern):
+                path.unlink(missing_ok=True)
+                removed += 1
         return removed
+
+
+class SummaryCache:
+    """Small JSON facts about a recording, under the same key discipline.
+
+    Listing the recordings has to say how many laps of each are usable, and
+    that answer costs the whole geometry pipeline for every lap: measured over
+    78 recordings it took 9.3 s, on the page a user lands on. It depends only
+    on the recording, so it is worth keeping - but it is a handful of numbers
+    and a few strings, not arrays, and forcing it through ``.npz`` would mean
+    encoding strings as object arrays.
+    """
+
+    def __init__(self, directory: "str | Path") -> None:
+        self.directory = Path(directory)
+
+    def _path(self, key: str, kind: str) -> Path:
+        safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in kind)
+        return self.directory / f"{key}.{safe}.json"
+
+    def load(self, key: str, kind: str) -> "dict | None":
+        path = self._path(key, kind)
+        if not path.is_file():
+            return None
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(stored, dict):
+            return None
+        if stored.get(_VERSION_KEY) != CACHE_FORMAT_VERSION:
+            return None
+        return stored.get("value")
+
+    def store(self, key: str, kind: str, value: dict) -> Path:
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise CacheError(f"cannot use cache directory {self.directory}: {exc}") from exc
+        path = self._path(key, kind)
+        temporary = path.with_suffix(f".json.{os.getpid()}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps({_VERSION_KEY: CACHE_FORMAT_VERSION, "value": value}),
+                encoding="utf-8",
+            )
+            os.replace(temporary, path)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise CacheError(f"cannot write {path}: {exc}") from exc
+        return path
