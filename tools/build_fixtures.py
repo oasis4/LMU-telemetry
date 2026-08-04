@@ -85,6 +85,14 @@ FIXTURES: list[tuple[str, str, float | None, str]] = [
         "lap 2 covers 1.011 track lengths yet winds 0.00 times round the "
         "circuit: a 74 m position jump cancels its turning",
     ),
+    (
+        "Bahrain International Circuit_Q_2026-04-18T18_52_55Z.duckdb",
+        "bahrain_q_backward_lap_dist.duckdb",
+        410.0,
+        "lap 2 steps backwards in Lap Dist 33 times, once by 5.2 m - further "
+        "than a grid step, so it is the lap that tells a running maximum "
+        "apart from sorting by distance",
+    ),
 ]
 
 

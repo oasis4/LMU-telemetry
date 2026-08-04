@@ -107,6 +107,14 @@ def position_jump_file() -> Path:
 
 
 @pytest.fixture(scope="session")
+def backward_lap_dist_file() -> Path:
+    path = FIXTURE_DIR / "bahrain_q_backward_lap_dist.duckdb"
+    if not path.is_file():
+        pytest.skip("backward-Lap-Dist fixture not built")
+    return path
+
+
+@pytest.fixture(scope="session")
 def zero_winding_file() -> Path:
     path = FIXTURE_DIR / "paul_ricard_p_zero_winding.duckdb"
     if not path.is_file():
