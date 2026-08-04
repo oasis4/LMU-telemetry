@@ -1,41 +1,48 @@
 {
+  "Algarve International Circuit": {
+    "track_length_m": 4634.9,
+    "closure_deg": 353,
+    "corner_count": 14,
+    "apex_m": [
+      404, 564, 730, 830, 1456, 1722, 1930, 2072, 2478, 2744, 2884, 3194,
+      3418, 3860
+    ],
+    "names": [
+      "Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6", "Turn 7",
+      "Turn 8", "Turn 9", "Turn 10", "Turn 11", "Turn 12", "Turns 13-14",
+      "Turn 15"
+    ]
+  },
   "Autodromo Nazionale Monza": {
     "track_length_m": 5778.1,
-    "closure_deg": 359,
+    "closure_deg": 361,
     "corner_count": 11,
-    "apex_m": [932, 972, 1354, 2146, 2190, 2550, 2878, 3948, 4050, 4132, 5178],
+    "apex_m": [
+      932, 972, 1410, 2146, 2188, 2570, 2878, 3948, 4058, 4138, 5168
+    ],
     "names": [
       "Variante del Rettifilo 1", "Variante del Rettifilo 2", "Curva Grande",
       "Variante della Roggia 1", "Variante della Roggia 2",
-      "Curva di Lesmo 1", "Curva di Lesmo 2",
-      "Variante Ascari 1", "Variante Ascari 2", "Variante Ascari 3",
-      "Curva Parabolica"
-    ]
-  },
-  "Algarve International Circuit": {
-    "track_length_m": 4634.9,
-    "closure_deg": 350,
-    "corner_count": 14,
-    "apex_m": [406, 566, 726, 820, 1458, 1674, 1908, 2070, 2464, 2744, 2952, 3200, 3428, 3848],
-    "names": [
-      "Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6", "Turn 7",
-      "Turn 8", "Turn 9", "Turn 10", "Turn 11", "Turn 12", "Turns 13-14", "Turn 15"
+      "Curva di Lesmo 1", "Curva di Lesmo 2", "Variante Ascari 1",
+      "Variante Ascari 2", "Variante Ascari 3", "Curva Parabolica"
     ]
   },
   "Circuit de la Sarthe": {
     "track_length_m": 13620.0,
-    "closure_deg": 372,
+    "closure_deg": 374,
     "corner_count": 25,
-    "apex_m": [670, 844, 908, 1270, 1490, 1590, 1914, 4056, 4134, 4224,
-               6016, 6086, 6200, 7738, 9650, 9832, 10160, 11532, 11792,
-               12212, 12434, 13254, 13318, 13406, 13446],
+    "apex_m": [
+      700, 840, 904, 1290, 1492, 1576, 1914, 4054, 4118, 4220, 6032, 6102,
+      6198, 7740, 9662, 9840, 10160, 11514, 11974, 12178, 12422, 13256, 13306,
+      13406, 13446
+    ],
     "names": [
-      "Dunlop Curve", "Dunlop Chicane 1", "Dunlop Chicane 2",
-      "Esses 1", "Esses 2", "Esses 3", "Tertre Rouge",
-      "Mulsanne Chicane 1a", "Mulsanne Chicane 1b", "Mulsanne Chicane 1c",
-      "Mulsanne Chicane 2a", "Mulsanne Chicane 2b", "Mulsanne Chicane 2c",
-      "Mulsanne Corner", "Indianapolis 1", "Indianapolis 2", "Arnage",
-      "Porsche Curves 1", "Porsche Curves 2", "Porsche Curves 3", "Porsche Curves 4",
+      "Dunlop Curve", "Dunlop Chicane 1", "Dunlop Chicane 2", "Esses 1",
+      "Esses 2", "Esses 3", "Tertre Rouge", "Mulsanne Chicane 1a",
+      "Mulsanne Chicane 1b", "Mulsanne Chicane 1c", "Mulsanne Chicane 2a",
+      "Mulsanne Chicane 2b", "Mulsanne Chicane 2c", "Mulsanne Corner",
+      "Indianapolis 1", "Indianapolis 2", "Arnage", "Porsche Curves 1",
+      "Porsche Curves 2", "Porsche Curves 3", "Porsche Curves 4",
       "Ford Chicane 1", "Ford Chicane 2", "Ford Chicane 3", "Ford Chicane 4"
     ]
   }
