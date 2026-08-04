@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from lmu_telemetry.core.session import Session, SessionInfo
-from lmu_telemetry.core.track_model import TrackKey, reference_line
+from lmu_telemetry.core.track_model import TrackKey, build_track_model, reference_line
 
 
 class _StubSession:
@@ -16,28 +16,41 @@ class _StubSession:
         self.track_length_m = length
 
 
-def test_identity_combines_name_layout_and_length(monza_q_file):
+def test_identity_combines_name_and_layout(monza_q_file):
     with Session.open(monza_q_file) as s:
         key = TrackKey.of(s)
     assert key.track == "Autodromo Nazionale Monza"
     assert key.layout == "Autodromo Nazionale Monza"
-    assert key.length_bucket_m == 5780
 
 
-def test_lap_to_lap_length_scatter_does_not_split_a_track():
-    """Le Mans measures 13619.4-13621.8 m across sessions. One track, one key."""
+def test_identity_does_not_depend_on_the_measured_length():
+    """Le Mans measures 13619.4-13621.8 m across sessions. One track, one key.
+
+    Length used to be bucketed into the key specifically to absorb this
+    scatter. It no longer is - name and layout alone decide identity, so
+    scatter of any size (as long as it doesn't cross the layout-agreement
+    check in build_track_model) simply never reaches the key at all.
+    """
     a = TrackKey.of(_StubSession("Circuit de la Sarthe", "Circuit de la Sarthe", 13619.4))
     b = TrackKey.of(_StubSession("Circuit de la Sarthe", "Circuit de la Sarthe", 13621.8))
     assert a == b
     assert hash(a) == hash(b)
-    assert a.length_bucket_m == 13620
 
 
-def test_genuinely_different_layouts_get_different_keys():
-    """A short and a full layout sharing one name must not collapse."""
-    short = TrackKey.of(_StubSession("Some Circuit", "Some Circuit", 3000.0))
-    full = TrackKey.of(_StubSession("Some Circuit", "Some Circuit", 5000.0))
-    assert short != full
+def test_build_track_model_rejects_a_genuine_layout_collision():
+    """A short and a full layout sharing a name must not silently average.
+
+    TrackKey no longer separates them - see the test above, they now key
+    equal. Catching this moved to build_track_model, the only place that
+    sees every session of a track at once. Its length-agreement check runs
+    before any lap/channel access, so a minimal stub exposing only what
+    TrackKey.of and the length comparison read is enough to drive it here
+    without needing real lap data.
+    """
+    short = _StubSession("Some Circuit", "Some Circuit", 3000.0)
+    full = _StubSession("Some Circuit", "Some Circuit", 5000.0)
+    with pytest.raises(ValueError):
+        build_track_model([short, full])
 
 
 def test_slug_is_filesystem_safe(monza_q_file):
@@ -48,13 +61,13 @@ def test_slug_is_filesystem_safe(monza_q_file):
 
 
 def test_slug_cannot_collide_across_different_identities():
-    a = TrackKey("A", "B-C", 5).slug()
-    b = TrackKey("A-B", "C", 5).slug()
+    a = TrackKey("A", "B-C").slug()
+    b = TrackKey("A-B", "C").slug()
     assert a != b
 
 
 def test_slug_handles_punctuation_and_stays_filesystem_safe():
-    slug = TrackKey("Circuit de Spa-Francorchamps", "Grand Prix / 2024", 7004).slug()
+    slug = TrackKey("Circuit de Spa-Francorchamps", "Grand Prix / 2024").slug()
     assert " " not in slug
     assert "/" not in slug
     assert all(c.isalnum() or c in "-_" for c in slug)

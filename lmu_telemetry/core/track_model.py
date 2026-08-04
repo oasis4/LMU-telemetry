@@ -20,23 +20,32 @@ from . import geometry
 from .corners import Corner, detect_corners
 from .quality import clean_laps, coverage_reason
 
-#: Track length is bucketed to this resolution before it enters the identity,
-#: so lap-to-lap scatter (Le Mans: 13619.4-13621.8 m) does not split a track
-#: while genuinely different layouts still separate.
-LENGTH_BUCKET_M = 10
-
 
 @dataclass(frozen=True)
 class TrackKey:
     """What makes two sessions the same track.
 
-    The name alone is not enough: a circuit can ship several layouts under one
-    name. The measured length separates them.
+    Identity used to include the measured length rounded to a fixed grid, on
+    the theory that lap-to-lap measurement scatter should not split a track
+    while two layouts sharing a name should still separate. That does not
+    work: any fixed grid has boundaries, and a cluster of near-identical
+    measurements that straddles one gets split into two identities anyway -
+    on the corpus, one Monza session measuring 5773.812 m bucketed one grid
+    cell away from the other 22 sessions' 5775-5780 m, splitting a single
+    134-lap track into two, with the 1-lap outlier's model shadowing the
+    correct one. Widening the bucket only moves the boundary; it does not
+    remove it.
+
+    So identity is name plus layout only. LMU already reports ``TrackLayout``
+    in the file metadata, which is what actually distinguishes two layouts
+    sharing a name - the length was only ever a proxy for that. Length
+    agreement across sessions is now verified in ``build_track_model``, the
+    only place that sees every session of a track at once and can therefore
+    tell scatter apart from a genuine layout collision.
     """
 
     track: str
     layout: str
-    length_bucket_m: int
 
     @classmethod
     def of(cls, session) -> "TrackKey | None":
@@ -47,7 +56,6 @@ class TrackKey:
         return cls(
             track=info.track,
             layout=info.layout or info.track,
-            length_bucket_m=int(round(length / LENGTH_BUCKET_M) * LENGTH_BUCKET_M),
         )
 
     def slug(self) -> str:
@@ -59,7 +67,7 @@ class TrackKey:
         cached models. A slugified field never contains a double hyphen, so
         this joiner is unambiguous.
         """
-        parts = (self.track, self.layout, str(self.length_bucket_m))
+        parts = (self.track, self.layout)
         return "--".join(
             re.sub(r"[^A-Za-z0-9]+", "-", part).strip("-").lower() for part in parts
         )
@@ -85,6 +93,13 @@ def reference_line(lines) -> tuple[np.ndarray, np.ndarray]:
 #: Below this many clean laps the model is served with a warning attached.
 MIN_CONFIDENT_LAPS = 3
 
+#: Maximum fractional deviation a session's measured length may have from the
+#: median before it is treated as a different layout rather than measurement
+#: scatter. 2%: comfortably wider than the lap-to-lap scatter seen on the
+#: corpus (well under 0.1%), comfortably narrower than what two genuinely
+#: different layouts sharing a name would produce.
+LENGTH_AGREEMENT_TOLERANCE = 0.02
+
 
 @dataclass(frozen=True)
 class TrackModel:
@@ -100,7 +115,6 @@ class TrackModel:
         return {
             "track": self.key.track,
             "layout": self.key.layout,
-            "length_bucket_m": self.key.length_bucket_m,
             "track_length_m": self.track_length_m,
             "closure_deg": self.closure_deg,
             "lap_count": self.lap_count,
@@ -120,7 +134,7 @@ class TrackModel:
     @classmethod
     def from_dict(cls, data: dict) -> "TrackModel":
         return cls(
-            key=TrackKey(data["track"], data["layout"], int(data["length_bucket_m"])),
+            key=TrackKey(data["track"], data["layout"]),
             track_length_m=float(data["track_length_m"]),
             corners=[Corner(**c) for c in data["corners"]],
             closure_deg=float(data["closure_deg"]),
@@ -171,6 +185,25 @@ def build_track_model(sessions) -> "TrackModel | None":
 
     lengths = [s.track_length_m for s in sessions if s.track_length_m is not None]
     track_length = float(np.median(lengths))
+
+    # TrackKey no longer carries the length, so this is the only place that
+    # ever sees every session of a track at once - the one place a genuine
+    # layout collision (two different circuits sharing a name) can actually
+    # be told apart from ordinary lap-to-lap measurement scatter. Scatter on
+    # the corpus is well under 0.1%; two distinct layouts differ by far more
+    # than LENGTH_AGREEMENT_TOLERANCE, so this raises loudly instead of
+    # silently splitting - or silently averaging together - a track.
+    for s in sessions:
+        if s.track_length_m is None:
+            continue
+        deviation = abs(s.track_length_m - track_length) / track_length
+        if deviation > LENGTH_AGREEMENT_TOLERANCE:
+            raise ValueError(
+                f"session length {s.track_length_m} m disagrees with the "
+                f"median {track_length} m by more than "
+                f"{LENGTH_AGREEMENT_TOLERANCE:.0%}; sessions may span two "
+                f"different layouts sharing one name"
+            )
 
     lines = []
     for session in sessions:
