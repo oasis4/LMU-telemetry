@@ -193,8 +193,19 @@ Ab Runde 1 stimmt jede hergeleitete Dauer mit dem `Lap Time`-Event des Spiels
 
 ### 3.3 Referenzmodell der Strecke
 
-Identität einer Strecke: `(TrackName, TrackLayout, round(Streckenlänge, -1))`.
-Die Länge im Schlüssel trennt Layouts, die im Namen gleich heißen.
+Identität einer Strecke: `(TrackName, TrackLayout)`.
+
+Die Länge gehört **nicht** in den Schlüssel. Ein erster Entwurf rundete sie auf ein
+10-m-Raster, um Layouts zu trennen, die im Namen gleich heißen. Der Golden-Test hat
+gezeigt, dass das nicht funktioniert: ein festes Raster hat Grenzen, und eine
+Monza-Session mit 5773,812 m fiel in einen anderen Bucket als die übrigen 22 mit
+5775–5780 m. Monza zerfiel in zwei Identitäten, und ein Modell aus einer einzigen
+Runde verdeckte das aus 134 Runden. Eine größere Bucketgröße verschiebt die Grenze nur.
+
+Stattdessen prüft `build_track_model`, dass die Längen aller Sessions einer Strecke
+auf 2 % übereinstimmen, und wirft sonst. Das ist die einzige Stelle, die alle Sessions
+gleichzeitig sieht — eine echte Layout-Kollision fällt dort laut auf, statt eine
+Strecke still zu zerteilen.
 
 Aufbau, einmalig je Strecke:
 1. Alle sauberen Runden aller Sessions dieser Strecke sammeln
