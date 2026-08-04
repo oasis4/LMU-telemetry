@@ -102,6 +102,21 @@ def reference_line(lines) -> tuple[np.ndarray, np.ndarray]:
 #: Below this many clean laps the model is served with a warning attached.
 MIN_CONFIDENT_LAPS = 3
 
+#: Version of the pipeline a cached model was built by.
+#:
+#: A cached model is a *measurement*, not a document: it is only meaningful
+#: together with the code that produced it. Nothing in the stored fields
+#: records which detection constants, which smoothing window or which
+#: projection were in force, so without a stamp load_model would happily go on
+#: serving a model built under rules that no longer exist - and the staler it
+#: got, the less anything would notice.
+#:
+#: Raise this whenever a change moves where corners land: a detection
+#: constant, a smoothing window, the projection, the wrap handling. A cache
+#: written by any other version is discarded and rebuilt, which costs one
+#: rebuild and buys the guarantee that a served model matches this code.
+MODEL_FORMAT_VERSION = 1
+
 #: Maximum fractional deviation a session's measured length may have from the
 #: median before it is treated as a different layout rather than measurement
 #: scatter. 2%: comfortably wider than the lap-to-lap scatter seen on the
@@ -122,6 +137,7 @@ class TrackModel:
 
     def to_dict(self) -> dict:
         return {
+            "format_version": MODEL_FORMAT_VERSION,
             "track": self.key.track,
             "layout": self.key.layout,
             "track_length_m": self.track_length_m,
@@ -282,7 +298,17 @@ def save_model(model: TrackModel, cache_dir) -> Path:
 
 
 def load_model(key: TrackKey, cache_dir) -> "TrackModel | None":
+    """The cached model for *key*, or None if there is no usable one.
+
+    A model stamped with any version other than this pipeline's is treated as
+    absent, so the caller rebuilds it. Returning None rather than raising is
+    deliberate: a stale cache is a cache miss, not an error - the caller
+    already has to handle "not built yet", and this is that same case.
+    """
     path = Path(cache_dir) / f"{key.slug()}.json"
     if not path.is_file():
         return None
-    return TrackModel.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("format_version") != MODEL_FORMAT_VERSION:
+        return None
+    return TrackModel.from_dict(data)

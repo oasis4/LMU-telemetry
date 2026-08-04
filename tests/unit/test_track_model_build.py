@@ -4,6 +4,7 @@ import pytest
 from lmu_telemetry.core.quality import clean_laps
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import (
+    MODEL_FORMAT_VERSION,
     TrackModel,
     _lap_line,
     build_track_model,
@@ -93,6 +94,43 @@ def test_model_survives_a_round_trip_through_json(monza_q_file, tmp_path):
     # because the values round-trip through JSON as floats and come back
     # bit-identical.
     assert asdict(again) == asdict(model)
+
+
+def test_a_model_saved_under_another_version_does_not_load(monza_q_file, tmp_path):
+    """A cache built under different rules must be rebuilt, not trusted.
+
+    Nothing in the stored fields says which detection constants or which
+    projection produced them, so the stamp is the only thing standing between
+    a changed pipeline and a silently stale model.
+    """
+    import json
+
+    with Session.open(monza_q_file) as s:
+        model = build_track_model([s])
+    path = save_model(model, tmp_path)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["format_version"] == MODEL_FORMAT_VERSION
+    stored["format_version"] = MODEL_FORMAT_VERSION + 1
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+    assert load_model(model.key, tmp_path) is None
+
+
+def test_a_model_with_no_version_stamp_does_not_load(monza_q_file, tmp_path):
+    """Every cache written before the stamp existed was built under the
+    per-lap projection frames, so none of them may be served."""
+    import json
+
+    with Session.open(monza_q_file) as s:
+        model = build_track_model([s])
+    path = save_model(model, tmp_path)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    del stored["format_version"]
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+    assert load_model(model.key, tmp_path) is None
 
 
 def test_loading_an_absent_model_returns_none(monza_q_file, tmp_path):
