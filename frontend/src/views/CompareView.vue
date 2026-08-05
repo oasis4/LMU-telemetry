@@ -7,13 +7,15 @@
  * once per side, which meant the two halves of every per-corner figure
  * answered different questions.
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
+import CornerDetail from '../components/CornerDetail.vue'
 import CornerTable from '../components/CornerTable.vue'
 import DeltaChart from '../components/DeltaChart.vue'
 import LapPicker from '../components/LapPicker.vue'
 import SpeedChart from '../components/SpeedChart.vue'
+import TrackMap from '../components/TrackMap.vue'
 import { useTelemetryStore } from '../stores/telemetry.js'
 
 const store = useTelemetryStore()
@@ -23,16 +25,35 @@ const referenceLaps = ref([])
 const otherLaps = ref([])
 const selectedCorner = ref(null)
 const fullResolution = ref(false)
+const trackMap = shallowRef(null)
 
 const selection = computed(() => store.selection)
+
+/** Corner index -> seconds lost, so the map can colour each corner. */
+const losses = computed(() =>
+  Object.fromEntries((comparison.value?.corners ?? []).map((c) => [c.index, c.lost_s])),
+)
+
+function pickCorner(corner) {
+  // The map hands back its own corner object; the table's carries the metrics.
+  selectedCorner.value =
+    comparison.value?.corners.find((c) => c.index === corner.index) ?? corner
+}
 
 onMounted(() => store.loadSessions())
 
 async function pickSession(side, name) {
   store.select({ [side]: name, [`${side}Lap`]: null })
+  selectedCorner.value = null
   const laps = name ? await store.client.laps(name).catch(() => []) : []
   if (side === 'reference') referenceLaps.value = laps
   else otherLaps.value = laps
+  // The map belongs to the circuit, so it is fetched once per recording rather
+  // than per comparison, and only for the reference side - the two must be the
+  // same circuit or the server refuses the comparison anyway.
+  if (side === 'reference') {
+    trackMap.value = name ? await store.client.map(name).catch(() => null) : null
+  }
 }
 
 watch(
@@ -95,9 +116,23 @@ function seconds(value) {
         </label>
       </div>
 
-      <ol class="worst">
-        <li v-for="corner in worstCorners" :key="corner.index">{{ corner.summary }}</li>
-      </ol>
+      <div class="overview">
+        <TrackMap
+          v-if="trackMap"
+          :map="trackMap"
+          :losses="losses"
+          :selected="selectedCorner?.index ?? null"
+          @select="pickCorner"
+        />
+        <ol class="worst">
+          <li
+            v-for="corner in worstCorners"
+            :key="corner.index"
+            :class="{ selected: corner.index === selectedCorner?.index }"
+            @click="pickCorner(corner)"
+          >{{ corner.summary }}</li>
+        </ol>
+      </div>
 
       <DeltaChart
         :distance="comparison.series.distance_m"
@@ -112,10 +147,16 @@ function seconds(value) {
         :other-label="`lap ${comparison.other.lap}`"
       />
 
+      <CornerDetail
+        v-if="selectedCorner"
+        :corner="selectedCorner"
+        :comparison="comparison"
+      />
+
       <CornerTable
         :corners="comparison.corners"
         :selected="selectedCorner?.index ?? null"
-        @select="selectedCorner = $event"
+        @select="pickCorner"
       />
     </template>
   </section>
@@ -129,10 +170,17 @@ function seconds(value) {
 .figure { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .figure.loss { color: var(--loss); }
 .headline { display: flex; align-items: baseline; gap: 0.5rem; }
+
+.overview { display: grid; grid-template-columns: minmax(0, 520px) 1fr; gap: 1.5rem; align-items: start; }
 .worst { margin: 0; padding-left: 1.2rem; color: var(--text); }
-.worst li { margin-bottom: 0.2rem; }
+.worst li { margin-bottom: 0.25rem; cursor: pointer; }
+.worst li:hover { color: var(--accent); }
+.worst li.selected { color: var(--accent); font-weight: 600; }
 .error { color: var(--loss); font-weight: 600; }
 .quiet { color: var(--muted); }
 .resolution { font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 0.4rem; }
-@media (max-width: 800px) { .pickers { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .pickers { grid-template-columns: 1fr; }
+  .overview { grid-template-columns: 1fr; }
+}
 </style>

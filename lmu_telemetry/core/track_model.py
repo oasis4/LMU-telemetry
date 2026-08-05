@@ -115,7 +115,11 @@ MIN_CONFIDENT_LAPS = 3
 #: constant, a smoothing window, the projection, the wrap handling. A cache
 #: written by any other version is discarded and rebuilt, which costs one
 #: rebuild and buys the guarantee that a served model matches this code.
-MODEL_FORMAT_VERSION = 1
+#:
+#: 2: the reference line is stored. A version-1 model has no line, and
+#: ``from_dict`` would hand one back with ``line_x=None`` - a model that looks
+#: complete and cannot be drawn. Discarding those is the point of the stamp.
+MODEL_FORMAT_VERSION = 2
 
 #: Maximum fractional deviation a session's measured length may have from the
 #: median before it is treated as a different layout rather than measurement
@@ -123,6 +127,12 @@ MODEL_FORMAT_VERSION = 1
 #: corpus (well under 0.1%), comfortably narrower than what two genuinely
 #: different layouts sharing a name would produce.
 LENGTH_AGREEMENT_TOLERANCE = 0.02
+
+
+#: Centimetres. The reference line is stored to this precision because that is
+#: about what the recording supports, and because it is drawn at a few hundred
+#: pixels across - two decimal places is already far finer than any screen.
+LINE_PRECISION_M = 2
 
 
 @dataclass(frozen=True)
@@ -134,6 +144,12 @@ class TrackModel:
     lap_count: int
     confident: bool
     warning: str | None
+    #: The median racing line, in metres, one point per grid sample. This is
+    #: the shape a map is drawn from - measured, not reconstructed from corner
+    #: radii and headings, which is a drawing of what the detector believed
+    #: rather than of where the car went.
+    line_x: np.ndarray | None = None
+    line_y: np.ndarray | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -145,6 +161,10 @@ class TrackModel:
             "lap_count": self.lap_count,
             "confident": self.confident,
             "warning": self.warning,
+            "line_x": None if self.line_x is None
+            else [round(float(v), LINE_PRECISION_M) for v in self.line_x],
+            "line_y": None if self.line_y is None
+            else [round(float(v), LINE_PRECISION_M) for v in self.line_y],
             "corners": [
                 {
                     "index": c.index, "name": c.name,
@@ -158,6 +178,7 @@ class TrackModel:
 
     @classmethod
     def from_dict(cls, data: dict) -> "TrackModel":
+        line_x, line_y = data.get("line_x"), data.get("line_y")
         return cls(
             key=TrackKey(data["track"], data["layout"]),
             track_length_m=float(data["track_length_m"]),
@@ -166,6 +187,8 @@ class TrackModel:
             lap_count=int(data["lap_count"]),
             confident=bool(data["confident"]),
             warning=data.get("warning"),
+            line_x=None if line_x is None else np.asarray(line_x, dtype=np.float64),
+            line_y=None if line_y is None else np.asarray(line_y, dtype=np.float64),
         )
 
 
@@ -287,6 +310,8 @@ def build_track_model(sessions) -> "TrackModel | None":
         lap_count=len(lines),
         confident=confident,
         warning=warning,
+        line_x=x,
+        line_y=y,
     )
 
 

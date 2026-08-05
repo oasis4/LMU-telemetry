@@ -90,10 +90,20 @@ def test_model_survives_a_round_trip_through_json(monza_q_file, tmp_path):
     # Compare every field of the model and of every corner, so a value that is
     # dropped or swapped in to_dict/from_dict cannot slip through unnoticed.
     # pytest.approx() does not support nested dicts (raises TypeError on the
-    # "corners" list of dicts), so this compares exactly - which is fine here
-    # because the values round-trip through JSON as floats and come back
-    # bit-identical.
-    assert asdict(again) == asdict(model)
+    # "corners" list of dicts), so this compares exactly - which is fine for
+    # these fields because they round-trip through JSON as floats and come
+    # back bit-identical.
+    #
+    # The reference line is the exception: it is stored to centimetres, which
+    # is what the recording supports and what a map can show. It is compared
+    # to that precision in test_track_model_line.py.
+    LINE = {"line_x", "line_y"}
+    assert {k: v for k, v in asdict(again).items() if k not in LINE} == {
+        k: v for k, v in asdict(model).items() if k not in LINE
+    }
+    assert again.line_x is not None and model.line_x is not None
+    assert np.allclose(again.line_x, model.line_x, atol=0.01)
+    assert np.allclose(again.line_y, model.line_y, atol=0.01)
 
 
 def test_a_model_saved_under_another_version_does_not_load(monza_q_file, tmp_path):

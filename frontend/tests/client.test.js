@@ -56,6 +56,33 @@ describe('the api client', () => {
     expect(fetcher.mock.calls[0][0]).toContain('Circuit%20de%20la%20Sarthe_R.duckdb')
   })
 
+  it('brings the map back as typed coordinate arrays', async () => {
+    const fetcher = respond({
+      track: 'Monza', x: [0, 1, 2], y: [10, 11, 12], corners: [], samples: 3,
+    })
+    const client = createClient({ base: 'http://x/', fetcher })
+
+    const map = await client.map('monza.duckdb')
+
+    expect(map.x).toBeInstanceOf(Float64Array)
+    expect(map.y).toBeInstanceOf(Float64Array)
+    expect(Array.from(map.y)).toEqual([10, 11, 12])
+    expect(new URL(fetcher.mock.calls[0][0]).pathname).toBe(
+      '/api/sessions/monza.duckdb/map',
+    )
+  })
+
+  it('asks for the full map only when told to', async () => {
+    const fetcher = respond({ x: [], y: [], corners: [] })
+    const client = createClient({ base: 'http://x/', fetcher })
+
+    await client.map('a.duckdb')
+    expect(new URL(fetcher.mock.calls[0][0]).searchParams.has('full')).toBe(false)
+
+    await client.map('a.duckdb', { full: true })
+    expect(new URL(fetcher.mock.calls[1][0]).searchParams.get('full')).toBe('true')
+  })
+
   it('reports the server’s own reason for a refusal', async () => {
     const fetcher = respond(
       { detail: 'Monza and Paul Ricard are different circuits' },

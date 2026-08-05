@@ -33,6 +33,50 @@ from .pool import SessionPool
 _TRACE_ARRAYS = ("grid", "time_s", "speed_kmh", "throttle", "brake")
 
 
+def corner_spans(
+    start_m: float, end_m: float, kept_m: np.ndarray, track_length_m: float
+) -> "list[list[int]]":
+    """A corner's extent as index ranges into the points that were sent.
+
+    A corner containing the start/finish line has ``start_m > end_m`` and comes
+    back as two ranges - the run to the line and the run away from it. Read as
+    one range it is empty, and the corner disappears from the map without
+    anything saying so. No circuit in the working set has one (all four of the
+    original tracks start on a straight), which is why this is a function that
+    can be tested rather than a branch inside the route.
+    """
+    edges = (
+        [(start_m, end_m)]
+        if start_m <= end_m
+        else [(start_m, track_length_m), (0.0, end_m)]
+    )
+    out = []
+    for first_m, last_m in edges:
+        first = int(np.searchsorted(kept_m, first_m, side="left"))
+        last = int(np.searchsorted(kept_m, last_m, side="right"))
+        first = min(first, len(kept_m) - 1)
+        out.append([first, min(max(last, first + 1), len(kept_m))])
+    return out
+
+
+def path_stride(n_samples: int, target_points: int = TARGET_POINTS) -> int:
+    """How many samples to skip when thinning a path to *target_points*.
+
+    A path is thinned by taking every nth point, not by ``decimate``. That one
+    keeps the minimum and maximum of each bucket, which is right for a signal
+    where a spike must survive - but a path has two coordinates and only one
+    can drive the choice. Keeping the x-extremes of a bucket and dropping its
+    y-extremes does not preserve a shape, it distorts it.
+
+    The line is already sampled evenly, every 2 m of track, so every nth point
+    is evenly spaced too and the thinned path is the same shape at lower
+    resolution.
+    """
+    if n_samples <= target_points:
+        return 1
+    return max(1, -(-n_samples // target_points))
+
+
 def _series(values: np.ndarray, digits: int = 3) -> list[float]:
     """A numpy array as JSON numbers, rounded to what the reading supports.
 
@@ -203,6 +247,62 @@ def create_app(
                 "direction": c.direction,
                 "wraps": c.start_m > c.end_m,
             } for c in model.corners],
+        }
+
+    @app.get("/api/sessions/{name}/map")
+    def track_map(
+        name: str,
+        full: bool = Query(False, description="send every point instead of ~1500"),
+    ) -> dict:
+        """The circuit's shape, as measured, with each corner's span on it.
+
+        The line is the median racing line the corners were detected on - not
+        a shape reconstructed from their radii and headings, which would draw
+        what the detector believed rather than where the car went, and would
+        then agree with the corner list however wrong both were.
+
+        Corners are given as index ranges into the line, so the client marks
+        them by slicing rather than by matching distances back to points. A
+        corner that contains the start/finish line comes as two ranges.
+        """
+        session = _open(name)
+        model = sessions.model_for(session)
+        if model is None:
+            raise HTTPException(422, f"no clean lap in {name!r} to measure the track from")
+        if model.line_x is None or model.line_y is None:
+            raise HTTPException(
+                422, f"the cached model for {name!r} predates the reference line"
+            )
+
+        step_m = model.track_length_m / len(model.line_x)
+        stride = 1 if full else path_stride(len(model.line_x))
+        kept = np.arange(0, len(model.line_x), stride)
+        sent_x, sent_y = model.line_x[kept], model.line_y[kept]
+        # A corner's span is given as indices into what was actually sent, so
+        # the client marks it by slicing rather than by matching distances
+        # back to points.
+        kept_m = kept * step_m
+
+        return {
+            "track": model.key.track,
+            "layout": model.key.layout,
+            "track_length_m": round(model.track_length_m, 1),
+            "resolution": "full" if full else f"every {stride} of {len(model.line_x)} points",
+            "samples": len(sent_x),
+            "x": _series(sent_x, 2),
+            "y": _series(sent_y, 2),
+            "corners": [
+                {
+                    "index": c.index,
+                    "name": c.name,
+                    "direction": c.direction,
+                    "apex_m": round(c.apex_m, 1),
+                    "spans": corner_spans(
+                        c.start_m, c.end_m, kept_m, model.track_length_m
+                    ),
+                }
+                for c in model.corners
+            ],
         }
 
     def _trace_for(name: str, lap_number: int):

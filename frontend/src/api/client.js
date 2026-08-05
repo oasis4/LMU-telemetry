@@ -65,6 +65,13 @@ export function createClient({ base = DEFAULT_BASE, fetcher = fetch } = {}) {
     laps: (name) => get(`/api/sessions/${encodeURIComponent(name)}/laps`).then((b) => b.laps),
     track: (name) => get(`/api/sessions/${encodeURIComponent(name)}/track`),
 
+    async map(name, { full = false } = {}) {
+      const body = await get(`/api/sessions/${encodeURIComponent(name)}/map`, {
+        full: full || undefined,
+      })
+      return { ...body, x: Float64Array.from(body.x), y: Float64Array.from(body.y) }
+    },
+
     async trace(name, lap, { full = false } = {}) {
       const body = await get(
         `/api/sessions/${encodeURIComponent(name)}/laps/${lap}/trace`,
