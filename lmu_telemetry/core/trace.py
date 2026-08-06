@@ -21,7 +21,7 @@ import numpy as np
 
 from . import geometry
 from .laps import RESET_GRACE_S, Lap, one_lap_slice
-from .quality import DISTANCE_TOLERANCE
+from .quality import DISTANCE_TOLERANCE, lap_line_on_grid
 
 #: Channel name -> attribute on :class:`LapTrace`. Anything here must exist in
 #: the file; see :func:`build_trace` on why a missing one is an error.
@@ -50,6 +50,12 @@ class LapTrace:
     speed_kmh: np.ndarray
     throttle: np.ndarray
     brake: np.ndarray
+    #: Where the car actually was, in the track model's own projection frame,
+    #: so a lap draws on top of the reference line rather than beside it.
+    #: ``None`` when no origin was supplied - the frame would then be this
+    #: lap's own and overlaying it on anything else would be meaningless.
+    x: np.ndarray | None = None
+    y: np.ndarray | None = None
 
     def at(self, distance_m: float) -> dict[str, float]:
         """Every channel's value at *distance_m*, interpolated onto the grid."""
@@ -154,12 +160,20 @@ def build_trace(
     lap: Lap,
     track_length_m: float | None,
     channels: dict[str, str] | None = None,
+    origin: "tuple[float, float] | None" = None,
 ) -> LapTrace:
     """Put one lap on the track's distance grid.
 
     Raises :class:`TraceError` rather than returning a partial trace. Every
     caller of this compares one lap against another, and a trace with invented
     ends compares as confidently as a real one - so the failure has to be loud.
+
+    *origin* is the track model's projection origin. Given one, the lap's own
+    path comes back in that frame and can be drawn on the same map as the
+    reference line. Without one the path is left out entirely rather than
+    projected onto this lap's own mean: two laps centred on their own means
+    sit in different frames, and overlaying them draws a difference that is
+    the frames', not the driving's - measured at 112 m across Monza's laps.
     """
     if track_length_m is None or track_length_m <= 0:
         raise TraceError(f"lap {lap.number}: no usable track length")
@@ -173,6 +187,12 @@ def build_trace(
         attribute: _on_grid(session, lap, name, progress, track_length_m, tolerance_m)
         for name, attribute in channels.items()
     }
+    if origin is not None:
+        line, reason = lap_line_on_grid(session, lap, track_length_m, origin)
+        if line is None:
+            raise TraceError(f"lap {lap.number}: {reason}")
+        resampled["x"], resampled["y"] = line
+
     return LapTrace(
         lap=lap, grid=grid, time_s=_time_axis(lap, progress, grid), **resampled
     )

@@ -21,7 +21,14 @@ per lap: derived per lap, two drivers are compared against two different
 definitions of the same corner.
 """
 
-from .coaching import CornerComparison, Difference, biggest_losses, compare_corners
+from .coaching import (
+    Advice,
+    CornerComparison,
+    Difference,
+    advice,
+    biggest_losses,
+    compare_corners,
+)
 from .corners import Corner, detect_corners
 from .delta import delta_s, time_lost_over
 from .laps import Lap, NoLapDataError, segment_laps
@@ -39,6 +46,7 @@ from .track_model import (
 from .trace import LapTrace, TraceError, build_trace
 
 __all__ = [
+    "Advice",
     "Corner",
     "CornerComparison",
     "CornerMetrics",
@@ -53,6 +61,7 @@ __all__ = [
     "TraceError",
     "TrackKey",
     "TrackModel",
+    "advice",
     "apply_names",
     "assess_lap",
     "biggest_losses",

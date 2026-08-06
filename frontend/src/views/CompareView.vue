@@ -15,7 +15,7 @@
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
-import CornerDetail from '../components/CornerDetail.vue'
+import CornerFocus from '../components/CornerFocus.vue'
 import CornerTable from '../components/CornerTable.vue'
 import DeltaChart from '../components/DeltaChart.vue'
 import LapHeadline from '../components/LapHeadline.vue'
@@ -31,12 +31,20 @@ const { sessions, comparison, loading, error } = storeToRefs(store)
 const referenceLaps = ref([])
 const otherLaps = ref([])
 const loadingLaps = ref({ reference: false, other: false })
-const selectedCorner = ref(null)
+const focusIndex = ref(null)
 const fullResolution = ref(false)
 const trackMap = shallowRef(null)
 const trackModel = shallowRef(null)
 
 const selection = computed(() => store.selection)
+
+/** The corner in focus, derived rather than stored: a new comparison replaces
+ *  the corner objects, and a stored one would go on pointing at the old. */
+const selectedCorner = computed(() =>
+  focusIndex.value === null
+    ? null
+    : comparison.value?.corners[focusIndex.value] ?? null,
+)
 
 /** Corner index -> seconds lost, so the map can colour each corner. */
 const losses = computed(() =>
@@ -44,17 +52,23 @@ const losses = computed(() =>
 )
 
 function pickCorner(corner) {
-  // The map hands back its own corner object; the comparison's carries the
-  // metrics the detail panel needs.
-  selectedCorner.value =
-    comparison.value?.corners.find((c) => c.index === corner.index) ?? corner
+  // The map and the bars hand back their own corner object; the position in
+  // the comparison's own list is what the focus panel steps through.
+  const at = (comparison.value?.corners ?? []).findIndex((c) => c.index === corner.index)
+  focusIndex.value = at >= 0 ? at : null
+}
+
+function step(by) {
+  const total = comparison.value?.corners.length ?? 0
+  if (!total || focusIndex.value === null) return
+  focusIndex.value = Math.min(Math.max(focusIndex.value + by, 0), total - 1)
 }
 
 onMounted(() => store.loadSessions())
 
 async function pickSession(side, name) {
   store.select({ [side]: name, [`${side}Lap`]: null })
-  selectedCorner.value = null
+  focusIndex.value = null
   loadingLaps.value = { ...loadingLaps.value, [side]: true }
   try {
     const laps = name ? await store.client.laps(name).catch(() => []) : []
@@ -178,10 +192,12 @@ watch(
           />
         </section>
 
-        <CornerDetail
+        <CornerFocus
           v-if="selectedCorner"
-          :corner="selectedCorner"
           :comparison="comparison"
+          :map="trackMap"
+          :index="focusIndex"
+          @step="step"
         />
 
         <section class="card">

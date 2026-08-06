@@ -79,7 +79,7 @@ def test_a_lap_trace_is_decimated_by_default(client):
     body = client.get("/api/sessions/monza_q_3laps.duckdb/laps/2/trace").json()
     assert body["samples"] <= TARGET_POINTS
     assert set(body["series"]) == {
-        "distance_m", "time_s", "speed_kmh", "throttle", "brake"
+        "distance_m", "time_s", "speed_kmh", "throttle", "brake", "x", "y"
     }
     assert all(len(v) == body["samples"] for v in body["series"].values())
 

@@ -116,10 +116,13 @@ MIN_CONFIDENT_LAPS = 3
 #: written by any other version is discarded and rebuilt, which costs one
 #: rebuild and buys the guarantee that a served model matches this code.
 #:
+#: 3: the projection origin is stored, so a lap drawn beside the line can be
+#: put in the same frame without reloading the sessions it was measured from.
+#:
 #: 2: the reference line is stored. A version-1 model has no line, and
 #: ``from_dict`` would hand one back with ``line_x=None`` - a model that looks
 #: complete and cannot be drawn. Discarding those is the point of the stamp.
-MODEL_FORMAT_VERSION = 2
+MODEL_FORMAT_VERSION = 3
 
 #: Maximum fractional deviation a session's measured length may have from the
 #: median before it is treated as a different layout rather than measurement
@@ -150,6 +153,13 @@ class TrackModel:
     #: rather than of where the car went.
     line_x: np.ndarray | None = None
     line_y: np.ndarray | None = None
+    #: The projection origin the line was measured in, as ``(lat, lon)``.
+    #:
+    #: Stored because anything drawn beside the line - an individual lap's own
+    #: path, say - has to be projected in the same frame or the two will not
+    #: overlay. ``track_origin`` is deterministic for a given set of sessions,
+    #: but a cached model is served without those sessions being loaded.
+    origin: tuple[float, float] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -165,6 +175,7 @@ class TrackModel:
             else [round(float(v), LINE_PRECISION_M) for v in self.line_x],
             "line_y": None if self.line_y is None
             else [round(float(v), LINE_PRECISION_M) for v in self.line_y],
+            "origin": None if self.origin is None else list(self.origin),
             "corners": [
                 {
                     "index": c.index, "name": c.name,
@@ -189,6 +200,7 @@ class TrackModel:
             warning=data.get("warning"),
             line_x=None if line_x is None else np.asarray(line_x, dtype=np.float64),
             line_y=None if line_y is None else np.asarray(line_y, dtype=np.float64),
+            origin=None if data.get("origin") is None else tuple(data["origin"]),
         )
 
 
@@ -312,6 +324,7 @@ def build_track_model(sessions) -> "TrackModel | None":
         warning=warning,
         line_x=x,
         line_y=y,
+        origin=origin,
     )
 
 

@@ -25,12 +25,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..cache.store import ArrayCache, CacheError, SummaryCache, source_key
 from ..core import Session, build_trace, clean_laps, compare_corners, delta_s
+from ..core.coaching import advice
 from ..core.trace import LapTrace, TraceError
 from .decimate import TARGET_POINTS, decimate
 from .pool import SessionPool
 
 #: The arrays a cached lap trace consists of, in the order LapTrace takes them.
-_TRACE_ARRAYS = ("grid", "time_s", "speed_kmh", "throttle", "brake")
+_TRACE_ARRAYS = ("grid", "time_s", "speed_kmh", "throttle", "brake", "x", "y")
 
 
 def corner_spans(
@@ -385,7 +386,9 @@ def create_app(
                 )
 
         try:
-            trace = build_trace(session, lap, model.track_length_m)
+            trace = build_trace(
+                session, lap, model.track_length_m, origin=model.origin
+            )
         except TraceError as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -410,6 +413,11 @@ def create_app(
             "throttle": trace.throttle,
             "brake": trace.brake,
         }
+        # Where the car was, in the circuit's own frame, so a lap can be drawn
+        # on the same map as the reference line rather than beside it.
+        if trace.x is not None and trace.y is not None:
+            series["x"] = trace.x
+            series["y"] = trace.y
         sent = series if full else decimate(series, by="speed_kmh")
         return {
             "name": name,
@@ -460,6 +468,17 @@ def create_app(
             "resolution": "full" if full else f"~{TARGET_POINTS} points",
             "samples": len(sent["distance_m"]),
             "series": {k: _series(v) for k, v in sent.items()},
+            "advice": [
+                {
+                    "corner": a.corner.index,
+                    "name": a.corner.name,
+                    "headline": a.headline,
+                    "detail": a.detail,
+                    "because": a.because,
+                    "lost_s": round(a.lost_s, 3),
+                }
+                for a in advice(comparisons)
+            ],
             "corners": [{
                 "index": c.corner.index,
                 "name": c.corner.name,

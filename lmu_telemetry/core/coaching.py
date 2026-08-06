@@ -124,3 +124,179 @@ def compare_corners(
 def biggest_losses(comparisons, count: int = 3) -> list[CornerComparison]:
     """The corners that cost the most time, worst first."""
     return sorted(comparisons, key=lambda c: -c.lost_s)[:count]
+
+
+#: A corner has to have cost at least this much before anything is said about
+#: why. Below it the differences are within what one lap varies from the next,
+#: and a confident sentence about them would be noise given a voice.
+ADVICE_MIN_LOSS_S = 0.05
+
+#: How much later or earlier counts as a real difference in a pedal point.
+#: Lap Dist runs at 10 Hz - 5 to 8 m between samples at racing speed - so this
+#: is two samples' worth, not a resolution the recording can support.
+ADVICE_POINT_M = 15.0
+
+#: And how much slower counts, in km/h.
+ADVICE_SPEED_KMH = 3.0
+
+
+@dataclass(frozen=True)
+class Advice:
+    """Something to try, with the measurement it rests on.
+
+    ``because`` is the evidence, in the driver's own numbers. Nothing here is
+    inferred beyond what the pattern shows: the telemetry records what was
+    done, never why, so an explanation that the data does not force is left
+    unsaid rather than guessed.
+    """
+
+    corner: Corner
+    headline: str
+    detail: str
+    because: str
+    lost_s: float
+
+
+def _advise(comparison: "CornerComparison") -> "Advice | None":
+    """What to try in this corner, or None if the data does not say.
+
+    Each pattern below needs *several* measurements to agree before it will
+    speak. Later braking on its own means nothing - it is what a faster driver
+    does. Later braking together with a lower minimum speed and lost time is a
+    corner entered too fast to rotate, and that is a claim the numbers carry.
+    """
+    if comparison.lost_s < ADVICE_MIN_LOSS_S:
+        return None
+
+    reference, other = comparison.reference, comparison.other
+    minimum = other.min_speed_kmh - reference.min_speed_kmh
+    exit_speed = other.exit_speed_kmh - reference.exit_speed_kmh
+    brake = (
+        None
+        if reference.brake_point_m is None or other.brake_point_m is None
+        else other.brake_point_m - reference.brake_point_m
+    )
+    throttle = (
+        None
+        if reference.throttle_point_m is None or other.throttle_point_m is None
+        else other.throttle_point_m - reference.throttle_point_m
+    )
+
+    def amounts(*parts: str) -> str:
+        return ", ".join(parts)
+
+    # Braked later and could not carry it: entered faster than the corner took.
+    if (
+        brake is not None
+        and brake > ADVICE_POINT_M
+        and minimum < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "Try braking earlier here",
+            "You braked later but were slower through the middle, so the extra "
+            "entry speed did not survive the corner.",
+            amounts(
+                f"brake point {brake:+.0f} m",
+                f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
+    # Braked earlier and slower everywhere: there was time left on the brakes.
+    if (
+        brake is not None
+        and brake < -ADVICE_POINT_M
+        and minimum < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "You can brake later here",
+            "You braked earlier and were still slower through the corner, so "
+            "the earlier braking was not buying entry speed.",
+            amounts(
+                f"brake point {brake:+.0f} m",
+                f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
+    # Late on the power, with the entry matched: the loss is on the way out.
+    #
+    # The test is "minimum speed was not worse", not "the exit speed was
+    # slower". Exit speed is read at one sample - the corner's last - so a lap
+    # that was slower for the whole exit and had caught up by that one point
+    # would go unmentioned. Matching the entry is what rules out the
+    # alternative explanation, and the corner's own cost is the evidence that
+    # something was lost.
+    if (
+        throttle is not None
+        and throttle > ADVICE_POINT_M
+        and minimum > -ADVICE_SPEED_KMH
+    ):
+        parts = [f"throttle point {throttle:+.0f} m"]
+        if exit_speed < -ADVICE_SPEED_KMH:
+            parts.append(f"exit speed {exit_speed:+.1f} km/h")
+        parts.append(f"cost {comparison.lost_s:.3f} s")
+        return Advice(
+            comparison.corner,
+            "Get on the power earlier",
+            "You matched the reference through the corner but picked the "
+            "throttle up later, and the time went on the way out.",
+            amounts(*parts),
+            comparison.lost_s,
+        )
+
+    # Slower through the middle with nothing else to explain it.
+    if minimum < -ADVICE_SPEED_KMH and (brake is None or abs(brake) <= ADVICE_POINT_M):
+        return Advice(
+            comparison.corner,
+            "There is more corner speed here",
+            "You braked in the same place but carried less speed through the "
+            "middle.",
+            amounts(
+                f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
+    return None
+
+
+#: Two corners whose reference brake points sit this close were braked for
+#: once. Half a grid step apart is the same sample.
+SAME_BRAKING_M = 2.0
+
+
+def advice(comparisons, count: int = 4) -> "list[Advice]":
+    """What to try, worst corner first.
+
+    Fewer than *count* is the normal outcome and not a failure: a corner where
+    the measurements do not agree on a story gets no advice, because the
+    honest answer there is the numbers themselves.
+
+    Consecutive corners of a complex share one braking event - Monza's Ascari
+    is three corners and one stop - so the brake point found for each of them
+    is the same event. Saying "brake later" twice about one brake application
+    reads as two findings when there is one, so the second is dropped.
+    """
+    found: list[Advice] = []
+    braking_cited: list[float] = []
+
+    for comparison in sorted(comparisons, key=lambda c: -c.lost_s):
+        item = _advise(comparison)
+        if item is None:
+            continue
+        point = comparison.reference.brake_point_m
+        about_braking = "brake point" in item.because
+        if about_braking and point is not None:
+            if any(abs(point - cited) < SAME_BRAKING_M for cited in braking_cited):
+                continue
+            braking_cited.append(point)
+        found.append(item)
+        if len(found) == count:
+            break
+    return found
