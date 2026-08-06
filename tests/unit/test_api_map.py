@@ -153,7 +153,9 @@ def test_a_model_without_a_line_is_refused_rather_than_drawn(
         assert client.get("/api/sessions/monza.duckdb/map").status_code == 200
         pool = app.state.pool
         real = pool.model_for
-        pool.model_for = lambda session: replace(real(session), line_x=None, line_y=None)
+        pool.model_for = lambda session, siblings=None: replace(
+            real(session, siblings), line_x=None, line_y=None
+        )
         response = client.get("/api/sessions/monza.duckdb/map")
         pool.model_for = real
     app.state.pool.close()

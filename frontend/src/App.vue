@@ -50,11 +50,26 @@ nav a {
   letter-spacing: 0.04em;
 }
 nav a:hover, nav a.router-link-active { color: var(--accent); }
+/* Truncates rather than pushing the header wider. A recording name is long
+ * and unbreakable, and without min-width: 0 it stretched the page 61 px past
+ * the viewport on a phone - the header being the only thing that overflowed. */
 .context {
   margin-left: auto;
-  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-muted);
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
 }
 main { flex: 1; padding: 1.5rem; max-width: 1400px; width: 100%; margin: 0 auto; }
+
+/* Below this the same information is in the headline card, and the header has
+ * no room for it. */
+@media (max-width: 700px) {
+  .context { display: none; }
+  header { padding: 0 1rem; gap: 1rem; }
+  main { padding: 1rem; }
+}
 </style>

@@ -1,17 +1,50 @@
-/* Global styles. Dark, quiet, and out of the way of the numbers. */
+/* Design tokens.
+ *
+ * The four colours that carry meaning were validated with the data-viz
+ * validator against this file's own surface (#16181d), not chosen by eye:
+ *
+ *   compared lap  #3987e5   gain #199e70   loss #e66767
+ *   all-pairs: normal-vision ΔE 20.9 worst, contrast >= 3:1, in band.
+ *
+ * The reference lap deliberately has no hue. It is the baseline, so it wears
+ * chrome ink - which also keeps the palette at three hues. Four hues could not
+ * clear the all-pairs floor in any arrangement tried: red against orange came
+ * out at ΔE 7.1, red against yellow 13.0, both under the floor of 15.
+ *
+ * Gain against loss sits at CVD ΔE 6.5 (protan), inside the 6-8 band that is
+ * legal only with a second channel. So the sign is always written next to the
+ * colour, and on the map a lost corner is drawn thicker than a gained one.
+ */
 
 :root {
-  --bg: #0e0f12;
-  --panel: #16181d;
+  /* surfaces */
+  --page: #0e0f12;
+  --surface: #16181d;
+  --surface-raised: #1b1e24;
+  --hover: #21252c;
+  --selected: #263043;
+
+  /* ink */
+  --ink: #e9ecf1;
+  --ink-secondary: #aab3bf;
+  --ink-muted: #7d858f;
+
+  /* chrome */
   --line: #262a32;
-  --text: #e4e6ea;
-  --muted: #8a919c;
+  --grid: #22262d;
+  --axis: #333a44;
+
+  /* meaning — validated, see above */
+  --reference: #898781;
+  --compared: #3987e5;
+  --gain: #199e70;
+  --loss: #e66767;
+  --level: #4a5058;
   --accent: #c8ff00;
-  --loss: #ef5350;
-  --gain: #4caf82;
-  --chip: #22262e;
-  --hover: #1c1f26;
-  --selected: #23283a;
+
+  --radius: 8px;
+  --pad: 1rem;
+
   color-scheme: dark;
 }
 
@@ -30,26 +63,111 @@ body,
 }
 
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 15px;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 h1 {
-  font-size: 1.35rem;
-  font-weight: 700;
+  font-size: 1.25rem;
+  font-weight: 650;
   letter-spacing: -0.01em;
 }
 
-/* uPlot draws on a light default; these bring it into the page. */
-.u-legend {
-  color: var(--muted);
-  font-size: 0.8rem;
+h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
-.u-axis {
-  color: var(--muted);
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--compared);
+  outline-offset: 2px;
+}
+
+/* A card is the only container. Everything sits in one.
+ *
+ * min-width: 0 is load-bearing, not tidiness. A flex or grid item defaults to
+ * min-width: auto and will not shrink below its content - and a uPlot canvas
+ * has a fixed pixel width. Without this the card refuses to narrow, the host
+ * element keeps reporting the old width, the resize handler measures that and
+ * writes it straight back, and the page scrolls sideways for ever. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--pad);
+  min-width: 0;
+}
+
+.card > header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.card > header h2 {
+  color: var(--ink);
+}
+
+.card > header .note {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  margin-left: auto;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+/* uPlot draws light by default. These bring it onto the dark surface;
+ * gridlines and axes are solid hairlines one shade off it, never dashed. */
+.u-legend {
+  color: var(--ink-secondary);
+  font-size: 0.78rem;
+}
+
+.u-legend .u-marker {
+  border-width: 2px !important;
+}
+
+.u-legend th::after {
+  display: none;
+}
+
+.u-select {
+  background: rgba(57, 135, 229, 0.15);
+}
+
+.u-cursor-x,
+.u-cursor-y {
+  border-color: var(--ink-muted) !important;
 }

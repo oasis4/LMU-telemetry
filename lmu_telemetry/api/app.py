@@ -93,8 +93,10 @@ def create_app(
 ) -> FastAPI:
     """Build the application. *recordings_dir* is where sessions are read from."""
     root = Path(recordings_dir) if recordings_dir else Path("data") / "sessions"
-    sessions = pool if pool is not None else SessionPool()
     cache_root = Path(cache_dir) if cache_dir else Path(".cache") / "traces"
+    sessions = pool if pool is not None else SessionPool(
+        model_cache_dir=cache_root / "models"
+    )
     cache = ArrayCache(cache_root)
     summaries = SummaryCache(cache_root)
     # Keyed on (path, mtime, size) like the disk cache, so a replaced recording
@@ -133,6 +135,54 @@ def create_app(
             raise
         except Exception as exc:  # noqa: BLE001 - the client gets the reason
             raise HTTPException(422, f"{name!r} cannot be read: {exc}") from exc
+
+    def _siblings_of(path: Path) -> "list[Path]":
+        """Recordings of the same circuit as the one at *path*.
+
+        A track's geometry is measured from every clean lap of that circuit,
+        not from the one session being viewed: the curated corner names are
+        applied all-or-nothing and are dropped when too few laps let the
+        detected apexes drift, so a model built from one short session comes
+        back as T1..Tn.
+
+        The pool would sift the whole directory itself, but that means opening
+        all 78 recordings - 16.7 s measured on the first request. The cached
+        summaries already know each one's track and layout, so they do the
+        filtering and only the same circuit's recordings are opened.
+
+        This takes a path rather than an open session on purpose. Reading the
+        summaries opens whatever is not cached yet, which churns the pool and
+        evicts up to its whole contents - an open session handed in here would
+        be closed underneath the caller before it got used.
+        """
+        if not root.is_dir():
+            return []
+        try:
+            own = _summary(path)
+        except Exception:  # noqa: BLE001 - nothing to match against
+            return [path]
+        found = []
+        for candidate in sorted(root.glob("*.duckdb")):
+            try:
+                summary = _summary(candidate)
+            except Exception:  # noqa: BLE001 - an unreadable one cannot contribute
+                continue
+            if (summary.get("track"), summary.get("layout")) == (
+                own.get("track"),
+                own.get("layout"),
+            ):
+                found.append(candidate)
+        return found
+
+    def _model_for(name: str):
+        """The circuit behind *name*, and the open session it was asked about.
+
+        The sibling list is built first and the session opened after, because
+        building it churns the pool.
+        """
+        siblings = _siblings_of(_resolve(name))
+        session = _open(name)
+        return session, sessions.model_for(session, siblings)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -224,8 +274,7 @@ def create_app(
     @app.get("/api/sessions/{name}/track")
     def track_model(name: str) -> dict:
         """The circuit: its corners, built once per track identity."""
-        session = _open(name)
-        model = sessions.model_for(session)
+        session, model = _model_for(name)
         if model is None:
             raise HTTPException(422, f"no clean lap in {name!r} to measure the track from")
         return {
@@ -265,8 +314,7 @@ def create_app(
         them by slicing rather than by matching distances back to points. A
         corner that contains the start/finish line comes as two ranges.
         """
-        session = _open(name)
-        model = sessions.model_for(session)
+        session, model = _model_for(name)
         if model is None:
             raise HTTPException(422, f"no clean lap in {name!r} to measure the track from")
         if model.line_x is None or model.line_y is None:
@@ -316,8 +364,7 @@ def create_app(
         answer is the same either way, only slower.
         """
         path = _resolve(name)
-        session = _open(name)
-        model = sessions.model_for(session)
+        session, model = _model_for(name)
         if model is None:
             raise HTTPException(422, f"no clean lap in {name!r} to measure the track from")
         lap = next((l for l in session.laps if l.number == lap_number), None)
