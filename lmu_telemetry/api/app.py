@@ -498,6 +498,11 @@ def create_app(
                 "index": c.corner.index,
                 "name": c.corner.name,
                 "start_m": round(c.corner.start_m, 1),
+                # The apex travels with the corner's other two distances. The
+                # corner map marks it, and looking it up from a second route
+                # would be matching two lists by index again - the thing this
+                # server has no per-session corner route in order to prevent.
+                "apex_m": round(c.corner.apex_m, 1),
                 "end_m": round(c.corner.end_m, 1),
                 "lost_s": round(c.lost_s, 3),
                 "summary": c.summary,

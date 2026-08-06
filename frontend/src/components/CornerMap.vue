@@ -99,10 +99,20 @@ const referencePath = computed(() => pathOf(props.reference, lapIndexer(props.re
 const otherPath = computed(() => pathOf(props.other, lapIndexer(props.other)))
 const modelPath = computed(() => pathOf(props.map, null))
 
+/** Where the apex sits on the drawn line, or null if it cannot be placed.
+ *
+ *  Checked once, on the result. The comparison's corners carried no `apex_m`,
+ *  and `undefined` divided by a metres-per-point stayed a number-shaped
+ *  nothing all the way to `<circle cx="NaN">` - an attribute the browser
+ *  rejects and then ignores, so the marker simply was not there and nothing
+ *  said why. Guarding the input as well would read better and test worse:
+ *  either guard alone covers every case, so neither could be shown to matter.
+ */
 const apexPoint = computed(() => {
   const perPoint = props.map.track_length_m / props.map.x.length
   const index = Math.min(Math.round(props.corner.apex_m / perPoint), props.map.x.length - 1)
-  return project(props.map.x[index], props.map.y[index])
+  const point = project(props.map.x[index], props.map.y[index])
+  return point.every(Number.isFinite) ? point : null
 })
 </script>
 
@@ -112,8 +122,10 @@ const apexPoint = computed(() => {
     <path :d="modelPath" class="reference-line" />
     <path v-if="referencePath" :d="referencePath" class="lap reference" />
     <path v-if="otherPath" :d="otherPath" class="lap other" />
-    <circle :cx="apexPoint[0]" :cy="apexPoint[1]" r="3.5" class="apex" />
-    <text :x="apexPoint[0]" :y="apexPoint[1] - 9" class="apex-label">apex</text>
+    <template v-if="apexPoint">
+      <circle :cx="apexPoint[0]" :cy="apexPoint[1]" r="3.5" class="apex" />
+      <text :x="apexPoint[0]" :y="apexPoint[1] - 9" class="apex-label">apex</text>
+    </template>
   </svg>
 </template>
 

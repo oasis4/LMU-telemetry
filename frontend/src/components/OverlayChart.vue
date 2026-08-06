@@ -19,6 +19,7 @@ import 'uplot/dist/uPlot.min.css'
 
 import { useChartSize } from './useChartSize.js'
 import { baseOptions, zeroLine } from './chart-theme.js'
+import { showData } from './overlay-data.js'
 
 const props = defineProps({
   distance: { type: Object, required: true },
@@ -118,14 +119,29 @@ function build() {
   if (!host.value) return
   chart.value?.destroy()
   chart.value = new uPlot(options(), data(), host.value)
+  // Stated on the freshly built chart too: with a synced cursor uPlot leaves
+  // the x scale out of auto-ranging from the start, so a chart built while
+  // another row already published a range would adopt that one.
+  showData(chart.value, data())
 }
 
 onMounted(build)
 onBeforeUnmount(() => chart.value?.destroy())
 useChartSize(host, chart, () => props.height, () => [props.distance, props.series])
 
+// One watcher for everything the chart draws, because two of them fought.
+//
+// The bands and markers had their own watcher calling `redraw()`. uPlot's
+// `redraw` re-commits the scale values the chart currently holds - and a
+// `setScale` from the same tick is still pending at that moment, so the
+// re-commit put the old range back. The result was an axis exactly one corner
+// behind the data, and after a couple of steps the data was outside the drawn
+// range entirely and the rows were blank.
+//
+// `showData` redraws as part of setting the data, so the hooks that draw the
+// band and the pedal-point rules run from here too.
 watch(
-  () => [props.distance, props.series],
+  () => [props.distance, props.series, props.bands, props.markers],
   ([, series], [, previous]) => {
     // A different number of series, or differently named ones, is new series
     // metadata - which setData cannot carry.
@@ -134,10 +150,9 @@ watch(
       previous.length === series.length &&
       previous.every((s, i) => s.label === series[i].label)
     if (!chart.value || !sameShape) return build()
-    chart.value.setData(data())
+    showData(chart.value, data())
   },
 )
-watch(() => [props.bands, props.markers], () => chart.value?.redraw(), { deep: true })
 </script>
 
 <template>

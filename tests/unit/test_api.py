@@ -145,6 +145,23 @@ def test_every_corner_of_a_comparison_carries_both_drivers_numbers(client):
             assert difference["what"]
 
 
+def test_every_corner_of_a_comparison_carries_the_three_distances(client):
+    """The corner map marks the apex, and read it off the comparison's own
+    corner - which did not carry one. `undefined` divided by a metres-per-point
+    ran all the way into the DOM as `<circle cx="NaN">`."""
+    body = client.get(
+        "/api/compare",
+        params={"reference": "monza_q_3laps.duckdb", "reference_lap": 2,
+                "other": "monza_q_3laps.duckdb", "other_lap": 1},
+    ).json()
+    track = client.get("/api/sessions/monza_q_3laps.duckdb/track").json()
+    assert [c["apex_m"] for c in body["corners"]] == [c["apex_m"] for c in track["corners"]]
+    for corner in body["corners"]:
+        assert corner["start_m"] <= corner["apex_m"] <= corner["end_m"] or (
+            corner["start_m"] > corner["end_m"]  # a corner spanning the line
+        )
+
+
 def test_a_comparison_carries_both_pedals_for_both_laps(client):
     """The corner overlay draws brake and throttle together; a response with
     only the brake makes the throttle a second round trip per corner."""
