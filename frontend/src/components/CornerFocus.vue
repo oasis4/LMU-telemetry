@@ -6,14 +6,22 @@
  * happened here", which is a different question and deserves its own screen
  * rather than a row in a table.
  *
- * The traces are tabbed rather than stacked: a corner is a few hundred metres,
- * and four charts of it side by side is four small pictures instead of one
- * readable one.
+ * The traces are stacked on one distance axis rather than tabbed. A corner is
+ * one event - brake, minimum speed, throttle, and the delta that follows from
+ * them - and reading it as one event means the rows have to share an x and a
+ * crosshair. Tabs made each channel a separate look and hid exactly the
+ * relationship the page is about.
+ *
+ * Each lap's brake point is drawn as a rule through every row, in that lap's
+ * own colour. It is the first thing to look at in a corner, so it is drawn
+ * rather than only listed.
  */
 import { computed, ref, watch } from 'vue'
 
 import CornerMap from './CornerMap.vue'
-import TraceChart from './TraceChart.vue'
+import OverlayChart from './OverlayChart.vue'
+import { SERIES } from './chart-theme.js'
+import { cornerWindow } from './corner-window.js'
 import { useTelemetryStore } from '../stores/telemetry.js'
 
 const props = defineProps({
@@ -29,68 +37,107 @@ const detail = ref(null)
 const paths = ref({ reference: null, other: null })
 const loading = ref(false)
 const failure = ref(null)
-const channel = ref('speed')
 
-const CHANNELS = [
-  { key: 'speed', label: 'Speed', unit: 'speed (km/h)',
-    pick: (s) => [s.speed_reference_kmh, s.speed_other_kmh],
-    format: (v) => (v == null ? '--' : `${v.toFixed(1)} km/h`) },
-  { key: 'delta', label: 'Delta', unit: 'delta (s)',
-    pick: (s) => [null, s.delta_s],
-    format: (v) => (v == null ? '--' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(3)} s`) },
-  { key: 'brake', label: 'Braking', unit: 'brake',
-    pick: (s) => [s.brake_reference, s.brake_other],
-    format: (v) => (v == null ? '--' : `${(v * 100).toFixed(0)} %`) },
-]
+const SYNC = 'corner-overlay'
 
 const corner = computed(() => props.comparison.corners[props.index] ?? null)
 const advice = computed(() =>
   (props.comparison.advice ?? []).filter((a) => a.corner === corner.value?.index),
 )
+const labels = computed(() => ({
+  reference: `lap ${props.comparison.reference.lap}`,
+  other: `lap ${props.comparison.other.lap}`,
+}))
 
-/** The indices of the full-resolution trace covering this corner plus run-up. */
+/** The full-resolution trace over this corner plus its run-up and run-off. */
 const slice = computed(() => {
   if (!detail.value || !corner.value) return null
-  const s = detail.value.series
-  const distance = s.distance_m
-  const step = distance[1] - distance[0]
-  const lapLength = distance[distance.length - 1] + step
-  const index = (m) => Math.round((((m % lapLength) + lapLength) % lapLength) / step)
-
-  const first = index(corner.value.start_m - props.approachM)
-  const last = index(corner.value.end_m + props.approachM)
-  const wraps = first > last
-  const take = (values) =>
-    !values
-      ? null
-      : wraps
-        ? Float64Array.from([
-            ...values.slice(first, distance.length),
-            ...values.slice(0, last),
-          ])
-        : values.slice(first, last)
-
-  const axis = Float64Array.from(take(distance))
-  for (let i = 1; i < axis.length; i += 1) {
-    if (axis[i] < axis[i - 1]) axis[i] += lapLength
-  }
-  return { axis, take, series: s }
-})
-
-const chart = computed(() => {
-  if (!slice.value) return null
-  const spec = CHANNELS.find((c) => c.key === channel.value)
-  const [reference, other] = spec.pick(slice.value.series)
+  const series = detail.value.series
   return {
-    spec,
-    distance: slice.value.axis,
-    // A single-series channel is drawn with the reference doubled up: uPlot
-    // needs two arrays, and the legend then names them honestly.
-    reference: slice.value.take(reference ?? other),
-    other: slice.value.take(other),
-    single: reference === null,
+    ...cornerWindow(
+      series.distance_m, corner.value.start_m, corner.value.end_m, props.approachM,
+    ),
+    series,
   }
 })
+
+/** The corner itself, as a band on the unwrapped axis. */
+const bands = computed(() => {
+  if (!slice.value || !corner.value) return []
+  return [{
+    from: slice.value.unwrap(corner.value.start_m),
+    to: slice.value.unwrap(corner.value.end_m),
+  }]
+})
+
+function rules(metric) {
+  if (!slice.value || !corner.value) return []
+  return [
+    { at: slice.value.unwrap(corner.value.reference[metric]), stroke: SERIES.reference },
+    { at: slice.value.unwrap(corner.value.other[metric]), stroke: SERIES.compared },
+  ]
+}
+const brakeRules = computed(() => rules('brake_point_m'))
+const throttleRules = computed(() => rules('throttle_point_m'))
+
+const speed = (v) => (v == null ? '--' : `${v.toFixed(1)} km/h`)
+const pedal = (v) => (v == null ? '--' : `${(v * 100).toFixed(0)} %`)
+const deltaValue = (v) =>
+  v == null ? '--' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(3)} s`
+
+/** The four rows of the overlay, in the order a corner happens. */
+const rows = computed(() => {
+  if (!slice.value) return []
+  const s = slice.value.series
+  const take = slice.value.take
+  const pair = (referenceKey, otherKey, format) => [
+    { values: take(s[referenceKey]), label: labels.value.reference,
+      stroke: SERIES.reference, width: 1.5, format },
+    { values: take(s[otherKey]), label: labels.value.other,
+      stroke: SERIES.compared, width: 2, format },
+  ]
+  return [
+    {
+      key: 'delta',
+      yLabel: 'delta (s)',
+      height: 120,
+      zero: true,
+      markers: brakeRules.value,
+      series: [{ values: take(s.delta_s), label: 'delta', stroke: '#d7dbe2',
+                 width: 1.75, format: deltaValue }],
+    },
+    {
+      key: 'speed',
+      yLabel: 'speed (km/h)',
+      height: 180,
+      markers: brakeRules.value,
+      series: pair('speed_reference_kmh', 'speed_other_kmh', speed),
+    },
+    {
+      key: 'brake',
+      yLabel: 'brake',
+      height: 110,
+      yRange: [0, 1],
+      markers: brakeRules.value,
+      series: pair('brake_reference', 'brake_other', pedal),
+    },
+    {
+      key: 'throttle',
+      yLabel: 'throttle',
+      height: 110,
+      yRange: [0, 1],
+      markers: throttleRules.value,
+      series: pair('throttle_reference', 'throttle_other', pedal),
+    },
+  // A row whose channel the server did not send is dropped, not drawn empty:
+  // an axis with no line on it says the lap had none.
+  ].filter((row) => row.series.every((s) => s.values))
+})
+
+/** Only the bottom row spends the height on naming the shared x-axis. */
+const rowsWithAxis = computed(() =>
+  rows.value.map((row, at) => ({ ...row, axis: at === rows.value.length - 1 })),
+)
 
 async function load() {
   loading.value = true
@@ -122,7 +169,10 @@ async function load() {
 }
 
 watch(
-  () => [props.comparison.reference.lap, props.comparison.other.lap],
+  () => [
+    props.comparison.reference.name, props.comparison.reference.lap,
+    props.comparison.other.name, props.comparison.other.lap,
+  ],
   () => {
     detail.value = null
     load()
@@ -138,7 +188,7 @@ function difference(a, b, unit, digits) {
   return `${b - a >= 0 ? '+' : '−'}${Math.abs(b - a).toFixed(digits)} ${unit}`
 }
 
-const rows = computed(() => {
+const numbers = computed(() => {
   if (!corner.value) return []
   const r = corner.value.reference
   const o = corner.value.other
@@ -191,6 +241,20 @@ const rows = computed(() => {
         />
         <p v-else-if="loading" class="muted">reading this corner…</p>
 
+        <table class="numbers">
+          <thead>
+            <tr><th></th><th class="num">reference</th><th class="num">compared</th><th class="num">difference</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in numbers" :key="row[0]">
+              <td>{{ row[0] }}</td>
+              <td class="num muted">{{ row[1] }}</td>
+              <td class="num">{{ row[2] }}</td>
+              <td class="num strong">{{ row[3] }}</td>
+            </tr>
+          </tbody>
+        </table>
+
         <ul v-if="advice.length" class="advice">
           <li v-for="tip in advice" :key="tip.headline">
             <p class="headline">{{ tip.headline }}</p>
@@ -200,52 +264,34 @@ const rows = computed(() => {
         </ul>
         <p v-else-if="!loading" class="muted no-advice">
           The measurements here do not agree on one story, so there is no tip —
-          the numbers below are what this corner actually says.
+          the numbers above are what this corner actually says.
         </p>
       </div>
 
       <div class="right">
-        <table class="numbers">
-          <thead>
-            <tr><th></th><th class="num">reference</th><th class="num">compared</th><th class="num">difference</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in rows" :key="row[0]">
-              <td>{{ row[0] }}</td>
-              <td class="num muted">{{ row[1] }}</td>
-              <td class="num">{{ row[2] }}</td>
-              <td class="num strong">{{ row[3] }}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div class="tabs" role="tablist">
-          <button
-            v-for="c in CHANNELS"
-            :key="c.key"
-            type="button"
-            role="tab"
-            :aria-selected="channel === c.key"
-            :class="{ current: channel === c.key }"
-            @click="channel = c.key"
-          >{{ c.label }}</button>
+        <div v-if="slice" class="stack">
+          <OverlayChart
+            v-for="row in rowsWithAxis"
+            :key="row.key"
+            :distance="slice.axis"
+            :series="row.series"
+            :bands="bands"
+            :markers="row.markers"
+            :y-label="row.yLabel"
+            :y-range="row.yRange ?? null"
+            :zero="row.zero ?? false"
+            :height="row.height"
+            :show-axis="row.axis ?? false"
+            :sync-key="SYNC"
+          />
         </div>
+        <p v-else class="muted">reading this corner…</p>
 
-        <TraceChart
-          v-if="chart"
-          :distance="chart.distance"
-          :reference="chart.reference"
-          :other="chart.other"
-          :reference-label="chart.single ? 'delta' : `lap ${props.comparison.reference.lap}`"
-          :other-label="chart.single ? 'delta' : `lap ${props.comparison.other.lap}`"
-          :y-label="chart.spec.unit"
-          :format="chart.spec.format"
-          :height="190"
-        />
         <p v-if="slice" class="muted resolution">
-          {{ slice.axis.length }} points over
-          {{ (slice.axis[slice.axis.length - 1] - slice.axis[0]).toFixed(0) }} m,
-          against {{ detail.samples }} for the whole lap
+          Shaded: the corner. Vertical rules: each lap's brake point, and on
+          the throttle row where it picked the power up. {{ slice.axis.length }}
+          points over
+          {{ (slice.axis[slice.axis.length - 1] - slice.axis[0]).toFixed(0) }} m.
         </p>
       </div>
     </div>
@@ -274,8 +320,12 @@ const rows = computed(() => {
 .cost.loss { color: var(--loss); }
 .cost.gain { color: var(--gain); }
 
-.body { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 1.2rem; }
+.body { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); gap: 1.2rem; }
 .left, .right { min-width: 0; display: flex; flex-direction: column; gap: 0.7rem; }
+
+/* The rows are one picture, so they sit against each other rather than as
+ * four cards with air between them. */
+.stack { display: flex; flex-direction: column; }
 
 .advice { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
 .advice li {
@@ -298,18 +348,7 @@ const rows = computed(() => {
 .numbers .num { text-align: right; }
 .strong { font-weight: 650; }
 
-.tabs { display: flex; gap: 0.3rem; }
-.tabs button {
-  padding: 0.25rem 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  font-size: 0.8rem;
-  color: var(--ink-secondary);
-}
-.tabs button:hover { background: var(--hover); }
-.tabs button.current { background: var(--selected); color: var(--ink); border-color: var(--compared); }
-
-.resolution { font-size: 0.75rem; }
+.resolution { font-size: 0.75rem; max-width: 60ch; }
 .failure { color: var(--loss); }
 
 @media (max-width: 1100px) {

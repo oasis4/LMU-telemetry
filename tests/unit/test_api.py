@@ -12,7 +12,11 @@ from lmu_telemetry.api.decimate import TARGET_POINTS
 def recordings(tmp_path_factory, fixture_dir):
     """A recordings directory holding the committed fixtures."""
     directory = tmp_path_factory.mktemp("recordings")
-    for name in ("monza_q_3laps.duckdb", "monza_r_position_jump.duckdb"):
+    for name in (
+        "monza_q_3laps.duckdb",
+        "monza_r_position_jump.duckdb",
+        "monza_p_fastest_lap_untimed.duckdb",
+    ):
         source = fixture_dir / name
         if source.is_file():
             shutil.copy(source, directory / name)
@@ -45,19 +49,40 @@ def test_sessions_are_listed_with_what_they_contain(client):
     assert monza["track"] == "Autodromo Nazionale Monza"
     assert monza["laps"] == 3
     assert monza["clean_laps"] == 2
-    assert monza["fastest_lap_s"] == pytest.approx(111.0, abs=0.01)
+    assert monza["best_lap_s"] == pytest.approx(111.0, abs=0.01)
+    assert monza["best_lap"] == 2
 
 
-def test_the_fastest_lap_offered_is_never_lap_zero(client):
+def test_the_best_time_advertised_is_one_the_pipeline_will_accept(client):
+    """The listing's headline time is what a lap is chosen by, so offering
+    one the comparison then refuses is offering a lap that cannot be opened.
+
+    Four of the 78 working-set recordings disagree that way. The fixture here
+    is one of them: Monza practice, where lap 3 is the quickest at 102.10 s
+    and the game recorded no lap time for it at all.
+    """
+    for session in client.get("/api/sessions").json()["sessions"]:
+        if session.get("best_lap") is None:
+            continue
+        laps = client.get(f"/api/sessions/{session['name']}/laps").json()["laps"]
+        best = next(l for l in laps if l["number"] == session["best_lap"])
+        assert best["clean"], f"{session['name']} offers a lap it refuses: {best['reason']}"
+        assert best["duration_s"] == pytest.approx(session["best_lap_s"], abs=0.001)
+
+
+def test_the_quickest_lap_is_not_offered_when_it_is_not_usable(client):
+    """The discriminating case, named rather than left to the sweep above."""
+    listed = client.get("/api/sessions").json()["sessions"]
+    monza = next(s for s in listed if s["name"] == "monza_p_fastest_lap_untimed.duckdb")
+    assert monza["best_lap"] == 1
+    assert monza["best_lap_s"] == pytest.approx(103.36, abs=0.01)
+
+
+def test_the_best_lap_offered_is_never_lap_zero(client):
     """Lap 0 runs from the start of recording to the first crossing. One
     Sebring session offers 43.3 s of a 5820 m circuit that way."""
     for session in client.get("/api/sessions").json()["sessions"]:
-        if session.get("fastest_lap_s") is None:
-            continue
-        laps = client.get(f"/api/sessions/{session['name']}/laps").json()["laps"]
-        zero = next((l for l in laps if l["number"] == 0), None)
-        if zero is not None:
-            assert session["fastest_lap_s"] != zero["duration_s"]
+        assert session.get("best_lap") != 0
 
 
 def test_every_lap_is_listed_and_an_excluded_one_says_why(client):
@@ -118,6 +143,23 @@ def test_every_corner_of_a_comparison_carries_both_drivers_numbers(client):
         assert corner["name"] in corner["summary"]
         for difference in corner["differences"]:
             assert difference["what"]
+
+
+def test_a_comparison_carries_both_pedals_for_both_laps(client):
+    """The corner overlay draws brake and throttle together; a response with
+    only the brake makes the throttle a second round trip per corner."""
+    body = client.get(
+        "/api/compare",
+        params={"reference": "monza_q_3laps.duckdb", "reference_lap": 2,
+                "other": "monza_q_3laps.duckdb", "other_lap": 1},
+    ).json()
+    expected = {
+        "distance_m", "delta_s", "speed_reference_kmh", "speed_other_kmh",
+        "brake_reference", "brake_other", "throttle_reference", "throttle_other",
+    }
+    assert set(body["series"]) == expected
+    # One shared index set, so the series can be read at the same position.
+    assert {len(v) for v in body["series"].values()} == {body["samples"]}
 
 
 def test_a_comparison_sends_the_samples_a_screen_can_show(client):

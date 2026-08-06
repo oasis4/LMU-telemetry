@@ -196,6 +196,12 @@ def create_app(
         lap of the recording. Over 78 recordings that measured 9.3 s - on the
         page a user lands on. It depends only on the recording, so it is
         cached under the same (path, mtime, size) key as everything else.
+
+        An entry written before ``best_lap`` existed is treated as absent
+        rather than migrated. Bumping ``CACHE_FORMAT_VERSION`` would say the
+        same thing, but that key is shared with the resampled traces, and
+        those are unaffected by this - it would throw away several minutes of
+        correct work to add one field.
         """
         try:
             key = source_key(path)
@@ -206,13 +212,19 @@ def create_app(
             if remembered is not None:
                 return remembered
             cached = summaries.load(key, "session")
-            if cached is not None:
+            if cached is not None and "best_lap" in cached:
                 summary_memo[key] = cached
                 return cached
 
         session = sessions.get(path)
         info = session.info
-        fastest = session.fastest_lap
+        # The quickest *usable* lap, not the quickest lap. The headline time
+        # is what a lap gets chosen by, so a recording that advertises one the
+        # comparison then refuses is advertising a lap that cannot be opened.
+        # Four of the 78 working-set recordings differ on this: Monza practice
+        # offers 1:42.10 for a lap the game itself recorded no time for.
+        usable = clean_laps(session)
+        best = min(usable, key=lambda l: l.duration_s) if usable else None
         summary = {
             "name": path.name,
             "track": info.track,
@@ -224,8 +236,9 @@ def create_app(
             "recorded_at": info.recorded_at,
             "track_length_m": session.track_length_m,
             "laps": len(session.laps),
-            "clean_laps": len(clean_laps(session)),
-            "fastest_lap_s": None if fastest is None else round(fastest.duration_s, 3),
+            "clean_laps": len(usable),
+            "best_lap": None if best is None else best.number,
+            "best_lap_s": None if best is None else round(best.duration_s, 3),
         }
         if key is not None:
             summary_memo[key] = summary
@@ -457,6 +470,8 @@ def create_app(
             "speed_other_kmh": b.speed_kmh,
             "brake_reference": a.brake,
             "brake_other": b.brake,
+            "throttle_reference": a.throttle,
+            "throttle_other": b.throttle,
         }
         sent = series if full else decimate(series, by="delta_s")
         return {

@@ -53,6 +53,26 @@ export const useTelemetryStore = defineStore('telemetry', () => {
       Boolean(selection.value.other) &&
       selection.value.otherLap !== null,
   )
+  /**
+   * The whole selection as one value, for a view that must reload when it
+   * changes.
+   *
+   * `ready` cannot do this. It is a boolean, so choosing a different lap of
+   * the same recording leaves it true - and a computed that recomputes to the
+   * same value notifies nobody. A view watching `ready` therefore goes on
+   * showing the previous lap's numbers under the new lap's name, which is
+   * exactly what happened.
+   *
+   * The parts are serialised rather than joined by a separator: a file name
+   * may contain whichever character one picks, and "a lap 21 against b lap 5"
+   * must not read the same as "a lap 2 against 1b lap 5".
+   */
+  const selectionKey = computed(() => {
+    if (!ready.value) return null
+    const { reference, referenceLap, other, otherLap } = selection.value
+    return JSON.stringify([reference, referenceLap, other, otherLap])
+  })
+
   const worstCorners = computed(() => {
     const found = comparison.value?.corners ?? []
     return [...found].sort((a, b) => b.lost_s - a.lost_s).slice(0, 5)
@@ -130,6 +150,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     selection,
     cleanLaps,
     ready,
+    selectionKey,
     worstCorners,
     loadSessions,
     loadLaps,

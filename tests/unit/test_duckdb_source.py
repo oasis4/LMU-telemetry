@@ -73,3 +73,41 @@ def test_every_corpus_file_opens_and_reports_metadata(corpus_files):
             meta = tf.metadata
             assert meta["TrackName"], f"{path.name} has no TrackName"
             assert meta["TrackLayout"], f"{path.name} has no TrackLayout"
+
+
+def test_one_file_can_be_read_from_several_threads_at_once(monza_q_file):
+    """The pool hands one open recording to every request that wants it, and
+    the server answers requests on a thread pool - so two of them read the
+    same file at the same time whenever a page asks for more than one thing.
+
+    A DuckDB connection is not safe to use that way. Interleaved queries
+    return each other's result sets: the observed failures were
+    ``ValueError: could not convert string to float: 'ts'`` - a column name
+    arriving where a row should be - and a lap table that read as empty, which
+    surfaced as "no 'Lap' event table" for a recording that has one.
+    """
+    import concurrent.futures as futures
+
+    with TelemetryFile(monza_q_file) as tf:
+        expected_laps = len(tf.events("Lap")[0])
+        expected_speed = len(tf.channel("Ground Speed"))
+
+    def read_everything(_):
+        # A fresh file per worker would prove nothing; the point is one file.
+        return (
+            len(shared.events("Lap")[0]),
+            len(shared.raw_channel("Ground Speed")),
+            shared.metadata["TrackName"],
+            "Lap" in shared.tables,
+        )
+
+    shared = TelemetryFile(monza_q_file)
+    try:
+        with futures.ThreadPoolExecutor(8) as pool:
+            results = list(pool.map(read_everything, range(32)))
+    finally:
+        shared.close()
+
+    assert results == [
+        (expected_laps, expected_speed, "Autodromo Nazionale Monza", True)
+    ] * 32

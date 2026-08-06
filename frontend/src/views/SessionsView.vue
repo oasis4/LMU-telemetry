@@ -33,7 +33,7 @@ function lapTime(seconds) {
           <th>recorded</th>
           <th class="num">laps</th>
           <th class="num">usable</th>
-          <th class="num">fastest</th>
+          <th class="num">best usable</th>
         </tr>
       </thead>
       <tbody>
@@ -50,7 +50,7 @@ function lapTime(seconds) {
             <td class="quiet">{{ session.recorded_at }}</td>
             <td class="num">{{ session.laps }}</td>
             <td class="num">{{ session.clean_laps }}</td>
-            <td class="num">{{ lapTime(session.fastest_lap_s) }}</td>
+            <td class="num">{{ lapTime(session.best_lap_s) }}</td>
           </template>
         </tr>
       </tbody>

@@ -86,6 +86,14 @@ FIXTURES: list[tuple[str, str, float | None, str]] = [
         "circuit: a 74 m position jump cancels its turning",
     ),
     (
+        "Autodromo Nazionale Monza_P_2026-04-19T16_07_46Z.duckdb",
+        "monza_p_fastest_lap_untimed.duckdb",
+        490.0,
+        "lap 3 is the quickest at 102.10 s but the game recorded no lap time "
+        "for it, so the quickest lap and the quickest *usable* lap are "
+        "different laps",
+    ),
+    (
         "Bahrain International Circuit_Q_2026-04-18T18_52_55Z.duckdb",
         "bahrain_q_backward_lap_dist.duckdb",
         410.0,

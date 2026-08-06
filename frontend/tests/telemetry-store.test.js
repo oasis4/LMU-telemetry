@@ -165,3 +165,52 @@ describe('the telemetry store', () => {
     expect(store.cleanLaps.map((l) => l.number)).toEqual([1, 2])
   })
 })
+
+describe('what a view watches to know the selection changed', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('has nothing to watch until both laps are chosen', () => {
+    const store = useTelemetryStore()
+    expect(store.selectionKey).toBeNull()
+    store.select({ reference: 'a.duckdb', referenceLap: 2 })
+    expect(store.selectionKey).toBeNull()
+  })
+
+  it('changes when only the lap changes', async () => {
+    // `ready` cannot do this job. It is true for both selections, and a
+    // computed that recomputes to the same value notifies nobody - so a view
+    // watching it goes on showing the previous lap's numbers with the new
+    // lap's name beside them. This is the whole reason the key exists.
+    const store = useTelemetryStore()
+    store.select({ reference: 'a.duckdb', referenceLap: 2,
+                   other: 'b.duckdb', otherLap: 5 })
+    const before = store.selectionKey
+    expect(store.ready).toBe(true)
+
+    store.select({ otherLap: 9 })
+
+    expect(store.ready).toBe(true)
+    expect(store.selectionKey).not.toBe(before)
+  })
+
+  it('changes when the recording on one side changes', () => {
+    const store = useTelemetryStore()
+    store.select({ reference: 'a.duckdb', referenceLap: 2,
+                   other: 'b.duckdb', otherLap: 5 })
+    const before = store.selectionKey
+    store.select({ other: 'c.duckdb' })
+    expect(store.selectionKey).not.toBe(before)
+  })
+
+  it('tells two selections apart that share a name and a number', () => {
+    // "a.duckdb lap 21" against "b.duckdb lap 5" must not read the same as
+    // "a.duckdb lap 2" against "1b.duckdb lap 5".
+    const store = useTelemetryStore()
+    store.select({ reference: 'a.duckdb', referenceLap: 21,
+                   other: 'b.duckdb', otherLap: 5 })
+    const first = store.selectionKey
+    store.select({ reference: 'a.duckdb', referenceLap: 2,
+                   other: '1b.duckdb', otherLap: 5 })
+    expect(store.selectionKey).not.toBe(first)
+  })
+})
