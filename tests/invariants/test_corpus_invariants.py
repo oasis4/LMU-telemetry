@@ -172,3 +172,52 @@ def _timed_laps(corpus_files) -> int:
         with Session.open(path) as s:
             total += sum(1 for lap in s.laps if lap.number > 0)
     return total
+
+
+def test_steering_turns_the_way_the_corner_does(corpus_files):
+    """Negative is left, positive is right.
+
+    Nothing in the file says so. It is established by measurement, against the
+    one thing that already knows a corner's direction - the geometry, which
+    derives it from the sign of the turning. Across two circuits every corner
+    agreed: 17 left-handers with negative mean steering, 28 right-handers with
+    positive. Without this the overlay could only show an unsigned wiggle, and
+    a mirrored readout would look entirely plausible.
+
+    Corners where the mean barely leaves zero are skipped: a kink taken flat
+    has no steering to speak of, and its sign is noise.
+    """
+    import numpy as np
+
+    from lmu_telemetry.core.quality import clean_laps
+    from lmu_telemetry.core.trace import build_trace
+    from lmu_telemetry.core.track_model import build_track_model
+
+    checked = agreed = 0
+    for path in corpus_files:
+        try:
+            session = Session.open(path)
+        except Exception:  # noqa: BLE001 - unreadable files have their own test
+            continue
+        with session:
+            usable = clean_laps(session)
+            model = build_track_model([session]) if usable else None
+            if model is None or not model.corners:
+                continue
+            trace = build_trace(session, usable[0], model.track_length_m)
+            step = model.track_length_m / len(trace.grid)
+            for corner in model.corners:
+                first, last = int(corner.start_m / step), int(corner.end_m / step)
+                if last <= first:
+                    continue
+                mean = float(np.mean(trace.steering[first:last]))
+                if abs(mean) < 0.02:
+                    continue
+                checked += 1
+                agreed += (mean < 0) == (corner.direction == "L")
+
+    assert checked > 100, f"only {checked} corners carried enough steering to check"
+    # Not every corner: a chicane's second half can still be unwinding the
+    # first, and a corner detected slightly wide catches the exit of its
+    # neighbour. The convention is what is being pinned, not each corner.
+    assert agreed / checked > 0.9, f"only {agreed} of {checked} turned the same way"

@@ -12,7 +12,7 @@ def _trace(grid, time_s) -> LapTrace:
     zeros = np.zeros_like(grid)
     return LapTrace(
         lap=None, grid=grid, time_s=np.asarray(time_s, dtype=float),
-        speed_kmh=zeros, throttle=zeros, brake=zeros,
+        speed_kmh=zeros, throttle=zeros, brake=zeros, steering=zeros,
     )
 
 

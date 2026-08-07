@@ -26,12 +26,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from ..cache.store import ArrayCache, CacheError, SummaryCache, source_key
 from ..core import Session, build_trace, clean_laps, compare_corners, delta_s
 from ..core.coaching import advice
+from ..core.metrics import BRAKE_ON
 from ..core.trace import LapTrace, TraceError
 from .decimate import TARGET_POINTS, decimate
 from .pool import SessionPool
 
 #: The arrays a cached lap trace consists of, in the order LapTrace takes them.
-_TRACE_ARRAYS = ("grid", "time_s", "speed_kmh", "throttle", "brake", "x", "y")
+_TRACE_ARRAYS = (
+    "grid", "time_s", "speed_kmh", "throttle", "brake", "steering", "x", "y"
+)
 
 
 def corner_spans(
@@ -425,6 +428,7 @@ def create_app(
             "speed_kmh": trace.speed_kmh,
             "throttle": trace.throttle,
             "brake": trace.brake,
+            "steering": trace.steering,
         }
         # Where the car was, in the circuit's own frame, so a lap can be drawn
         # on the same map as the reference line rather than beside it.
@@ -472,6 +476,8 @@ def create_app(
             "brake_other": b.brake,
             "throttle_reference": a.throttle,
             "throttle_other": b.throttle,
+            "steering_reference": a.steering,
+            "steering_other": b.steering,
         }
         sent = series if full else decimate(series, by="delta_s")
         return {
@@ -480,6 +486,12 @@ def create_app(
             "other": {"name": other, "lap": other_lap,
                       "duration_s": round(b.lap.duration_s, 3)},
             "lap_delta_s": round(float(delta[-1]), 3),
+            # The pedal pressure above which the car is braking. Sent rather
+            # than repeated in the client: the brake points in `corners` are
+            # found with this number, so a client drawing braking with a
+            # different one would shade a stretch that disagrees with the
+            # figure printed beside it.
+            "brake_on": BRAKE_ON,
             "resolution": "full" if full else f"~{TARGET_POINTS} points",
             "samples": len(sent["distance_m"]),
             "series": {k: _series(v) for k, v in sent.items()},

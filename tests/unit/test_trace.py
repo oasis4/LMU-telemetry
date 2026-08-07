@@ -122,3 +122,16 @@ def test_a_lap_that_does_not_span_the_track_is_refused(monza_q_file):
         lap = next(l for l in s.laps if l.number == 0)  # the out lap
         with pytest.raises(TraceError):
             build_trace(s, lap, s.track_length_m)
+
+
+def test_steering_arrives_as_a_fraction_of_lock_both_ways(monza_q_file):
+    """`Steering Pos` is recorded unitless (+-1) in some sessions and as a
+    percentage (+-100) in others, so the registry's conversion is the only
+    thing keeping the two comparable. It is a fraction of lock, not an angle:
+    nothing in the file names the lock, so nothing here reports degrees.
+    """
+    trace, _ = _trace(monza_q_file, 2)
+    assert trace.steering.shape == trace.grid.shape
+    assert -1.0 <= trace.steering.min() < 0.0, "a lap turns left somewhere"
+    assert 0.0 < trace.steering.max() <= 1.0, "and right somewhere"
+

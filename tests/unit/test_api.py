@@ -104,7 +104,8 @@ def test_a_lap_trace_is_decimated_by_default(client):
     body = client.get("/api/sessions/monza_q_3laps.duckdb/laps/2/trace").json()
     assert body["samples"] <= TARGET_POINTS
     assert set(body["series"]) == {
-        "distance_m", "time_s", "speed_kmh", "throttle", "brake", "x", "y"
+        "distance_m", "time_s", "speed_kmh", "throttle", "brake", "steering",
+        "x", "y",
     }
     assert all(len(v) == body["samples"] for v in body["series"].values())
 
@@ -162,9 +163,23 @@ def test_every_corner_of_a_comparison_carries_the_three_distances(client):
         )
 
 
-def test_a_comparison_carries_both_pedals_for_both_laps(client):
-    """The corner overlay draws brake and throttle together; a response with
-    only the brake makes the throttle a second round trip per corner."""
+def test_a_comparison_says_what_counts_as_braking(client):
+    """The corner map shades where the car is braking, and the brake points in
+    the same response were found with this threshold. A client with its own
+    number would shade a stretch that disagrees with the figure beside it."""
+    from lmu_telemetry.core.metrics import BRAKE_ON
+
+    body = client.get(
+        "/api/compare",
+        params={"reference": "monza_q_3laps.duckdb", "reference_lap": 2,
+                "other": "monza_q_3laps.duckdb", "other_lap": 1},
+    ).json()
+    assert body["brake_on"] == BRAKE_ON
+
+
+def test_a_comparison_carries_every_input_for_both_laps(client):
+    """The corner overlay draws the pedals and the wheel together; a response
+    carrying only the brake makes each of the others a round trip per corner."""
     body = client.get(
         "/api/compare",
         params={"reference": "monza_q_3laps.duckdb", "reference_lap": 2,
@@ -173,6 +188,7 @@ def test_a_comparison_carries_both_pedals_for_both_laps(client):
     expected = {
         "distance_m", "delta_s", "speed_reference_kmh", "speed_other_kmh",
         "brake_reference", "brake_other", "throttle_reference", "throttle_other",
+        "steering_reference", "steering_other",
     }
     assert set(body["series"]) == expected
     # One shared index set, so the series can be read at the same position.

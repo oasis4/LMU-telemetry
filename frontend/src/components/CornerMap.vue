@@ -10,15 +10,21 @@
  * would be a guess dressed as a measurement.
  *
  * What is drawn is measured: the reference line the corners were detected on,
- * and where each lap actually put the car.
+ * where each lap actually put the car, and which part of that the car spent on
+ * the brakes. The braking stretch is drawn heavier rather than in a hue of its
+ * own - the two laps already carry a hue each, and a third would make the
+ * picture about colour instead of about position.
  */
 import { computed } from 'vue'
 
 const props = defineProps({
   map: { type: Object, required: true },        // { x, y, corners, track_length_m }
   corner: { type: Object, required: true },     // the corner in focus
-  reference: { type: Object, default: null },   // { x, y } on the same grid
+  reference: { type: Object, default: null },   // { x, y, brake } on the same grid
   other: { type: Object, default: null },
+  /** Pedal pressure above which the car is braking. From the server, so it is
+   *  the same number the brake points in the table were found with. */
+  brakeOn: { type: Number, default: 0.05 },
   approachM: { type: Number, default: 150 },
   size: { type: Number, default: 420 },
 })
@@ -99,6 +105,44 @@ const referencePath = computed(() => pathOf(props.reference, lapIndexer(props.re
 const otherPath = computed(() => pathOf(props.other, lapIndexer(props.other)))
 const modelPath = computed(() => pathOf(props.map, null))
 
+/**
+ * The stretches of a lap where the car was braking, and where each began.
+ *
+ * Separate sub-paths rather than one: a corner can be braked for twice - a
+ * lift and a re-application - and joining them would draw a straight line
+ * across the part where the driver was off the pedal, which is exactly the
+ * part worth seeing.
+ */
+function brakingOf(lap) {
+  if (!lap?.brake) return { segments: [], starts: [] }
+  const sampleAt = lapIndexer(lap)
+  const segments = []
+  const starts = []
+  let current = []
+  for (const i of window.value) {
+    const index = sampleAt(i)
+    const on = lap.brake[index] > props.brakeOn
+    const x = lap.x[index]
+    const y = lap.y[index]
+    if (on && Number.isFinite(x) && Number.isFinite(y)) {
+      const point = project(x, y)
+      if (!current.length) starts.push(point)
+      current.push(point.map((v) => v.toFixed(1)).join(','))
+    } else if (current.length) {
+      // A single sample is a dot, not a stretch; two are needed for a line.
+      if (current.length > 1) segments.push(`M${current.join('L')}`)
+      else starts.pop()
+      current = []
+    }
+  }
+  if (current.length > 1) segments.push(`M${current.join('L')}`)
+  else if (current.length) starts.pop()
+  return { segments, starts }
+}
+
+const referenceBraking = computed(() => brakingOf(props.reference))
+const otherBraking = computed(() => brakingOf(props.other))
+
 /** Where the apex sits on the drawn line, or null if it cannot be placed.
  *
  *  Checked once, on the result. The comparison's corners carried no `apex_m`,
@@ -122,6 +166,16 @@ const apexPoint = computed(() => {
     <path :d="modelPath" class="reference-line" />
     <path v-if="referencePath" :d="referencePath" class="lap reference" />
     <path v-if="otherPath" :d="otherPath" class="lap other" />
+
+    <path v-for="(d, i) in referenceBraking.segments" :key="`rb-${i}`"
+          :d="d" class="braking reference" />
+    <path v-for="(d, i) in otherBraking.segments" :key="`ob-${i}`"
+          :d="d" class="braking other" />
+    <circle v-for="(p, i) in referenceBraking.starts" :key="`rs-${i}`"
+            :cx="p[0]" :cy="p[1]" r="3" class="brake-start reference" />
+    <circle v-for="(p, i) in otherBraking.starts" :key="`os-${i}`"
+            :cx="p[0]" :cy="p[1]" r="3.5" class="brake-start other" />
+
     <template v-if="apexPoint">
       <circle :cx="apexPoint[0]" :cy="apexPoint[1]" r="3.5" class="apex" />
       <text :x="apexPoint[0]" :y="apexPoint[1] - 9" class="apex-label">apex</text>
@@ -143,6 +197,16 @@ const apexPoint = computed(() => {
 .lap { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .lap.reference { stroke: var(--reference); stroke-width: 2; }
 .lap.other { stroke: var(--compared); stroke-width: 2.5; }
+
+/* Braking is weight, not hue. Each lap already owns a colour, and a third one
+ * would turn the picture into a legend-reading exercise; drawn heavier on the
+ * lap's own line it stays obvious whose braking it is and exactly where. */
+.braking { fill: none; stroke-linecap: butt; stroke-linejoin: round; }
+.braking.reference { stroke: var(--reference); stroke-width: 6; }
+.braking.other { stroke: var(--compared); stroke-width: 7; }
+/* The dot sits at the first metre on the pedal - the brake point itself. */
+.brake-start.reference { fill: var(--reference); }
+.brake-start.other { fill: var(--compared); }
 .apex { fill: var(--accent); }
 .apex-label {
   font-size: 9px;

@@ -35,6 +35,7 @@ def _trace(speed_kmh=None, throttle=None, brake=None, pace_kmh=150.0) -> LapTrac
         speed_kmh=speed,
         throttle=np.zeros(n) if throttle is None else np.asarray(throttle, float),
         brake=np.zeros(n) if brake is None else np.asarray(brake, float),
+        steering=np.zeros(n),
     )
 
 

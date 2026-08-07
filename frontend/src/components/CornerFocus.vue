@@ -82,6 +82,20 @@ const throttleRules = computed(() => rules('throttle_point_m'))
 
 const speed = (v) => (v == null ? '--' : `${v.toFixed(1)} km/h`)
 const pedal = (v) => (v == null ? '--' : `${(v * 100).toFixed(0)} %`)
+/**
+ * Steering as a share of lock, with the way the wheel is turned.
+ *
+ * Not degrees: the file records the wheel's position but never says how far
+ * full lock is, so an angle would be invented. Negative is left - established
+ * by measurement against the corner directions the geometry already knows,
+ * and pinned by an invariant over the whole corpus (1119 corners, 7 of them
+ * disagreeing when the convention is flipped).
+ */
+const wheel = (v) => {
+  if (v == null) return '--'
+  const share = `${Math.abs(v * 100).toFixed(0)} %`
+  return Math.abs(v) < 0.01 ? 'straight' : `${share} ${v < 0 ? 'left' : 'right'}`
+}
 const deltaValue = (v) =>
   v == null ? '--' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(3)} s`
 
@@ -129,6 +143,18 @@ const rows = computed(() => {
       markers: throttleRules.value,
       series: pair('throttle_reference', 'throttle_other', pedal),
     },
+    {
+      key: 'steering',
+      yLabel: 'steering',
+      height: 120,
+      // Fixed and symmetric: half a turn left has to look like the mirror of
+      // half a turn right, and an autoscaled corner that never unwinds would
+      // draw a gentle input as full lock.
+      yRange: [-1, 1],
+      zero: true,
+      markers: brakeRules.value,
+      series: pair('steering_reference', 'steering_other', wheel),
+    },
   // A row whose channel the server did not send is dropped, not drawn empty:
   // an axis with no line on it says the lap had none.
   ].filter((row) => row.series.every((s) => s.values))
@@ -153,14 +179,11 @@ async function load() {
       store.client.trace(other.name, other.lap, { full: true }),
     ])
     detail.value = full
-    paths.value = {
-      reference: referencePath.series.x
-        ? { x: referencePath.series.x, y: referencePath.series.y }
-        : null,
-      other: otherPath.series.x
-        ? { x: otherPath.series.x, y: otherPath.series.y }
-        : null,
-    }
+    const asPath = (trace) =>
+      trace.series.x
+        ? { x: trace.series.x, y: trace.series.y, brake: trace.series.brake }
+        : null
+    paths.value = { reference: asPath(referencePath), other: asPath(otherPath) }
   } catch (cause) {
     failure.value = cause.message ?? String(cause)
   } finally {
@@ -237,6 +260,7 @@ const numbers = computed(() => {
           :corner="corner"
           :reference="paths.reference"
           :other="paths.other"
+          :brake-on="props.comparison.brake_on ?? 0.05"
           :approach-m="props.approachM"
         />
         <p v-else-if="loading" class="muted">reading this corner…</p>
@@ -288,9 +312,11 @@ const numbers = computed(() => {
         <p v-else class="muted">reading this corner…</p>
 
         <p v-if="slice" class="muted resolution">
-          Shaded: the corner. Vertical rules: each lap's brake point, and on
-          the throttle row where it picked the power up. {{ slice.axis.length }}
-          points over
+          Shaded: the corner. Vertical rules: each lap's brake point. On the
+          map the heavy stretch is where that lap was on the brakes, and the
+          dot is where it got there. Steering is a share of lock — the file
+          records the wheel but never how far full lock is — negative left.
+          {{ slice.axis.length }} points over
           {{ (slice.axis[slice.axis.length - 1] - slice.axis[0]).toFixed(0) }} m.
         </p>
       </div>

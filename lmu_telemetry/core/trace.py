@@ -29,6 +29,7 @@ DEFAULT_CHANNELS = {
     "Ground Speed": "speed_kmh",
     "Throttle Pos": "throttle",
     "Brake Pos": "brake",
+    "Steering Pos": "steering",
 }
 
 
@@ -50,6 +51,11 @@ class LapTrace:
     speed_kmh: np.ndarray
     throttle: np.ndarray
     brake: np.ndarray
+    #: Signed fraction of lock, -1 to +1, never an angle: the file records the
+    #: wheel's position but not how far full lock is, so degrees would be
+    #: invented. Recorded unitless in most sessions and as a percentage in
+    #: others; the channel registry is what makes the two comparable.
+    steering: np.ndarray
     #: Where the car actually was, in the track model's own projection frame,
     #: so a lap draws on top of the reference line rather than beside it.
     #: ``None`` when no origin was supplied - the frame would then be this
@@ -67,6 +73,7 @@ class LapTrace:
             "speed_kmh": float(self.speed_kmh[index]),
             "throttle": float(self.throttle[index]),
             "brake": float(self.brake[index]),
+            "steering": float(self.steering[index]),
         }
 
 
