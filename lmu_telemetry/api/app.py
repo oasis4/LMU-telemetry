@@ -547,6 +547,12 @@ def _corner_metrics(metrics) -> dict:
     return {
         "brake_point_m": None if metrics.brake_point_m is None
         else round(metrics.brake_point_m, 1),
+        "brake_peak_m": None if metrics.brake_peak_m is None
+        else round(metrics.brake_peak_m, 1),
+        "brake_release_m": None if metrics.brake_release_m is None
+        else round(metrics.brake_release_m, 1),
+        "trail_length_m": None if metrics.trail_length_m is None
+        else round(metrics.trail_length_m, 1),
         "entry_speed_kmh": round(metrics.entry_speed_kmh, 1),
         "min_speed_kmh": round(metrics.min_speed_kmh, 1),
         "min_speed_at_m": round(metrics.min_speed_at_m, 1),

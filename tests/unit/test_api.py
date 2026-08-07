@@ -146,6 +146,30 @@ def test_every_corner_of_a_comparison_carries_both_drivers_numbers(client):
             assert difference["what"]
 
 
+def test_every_corner_of_a_comparison_carries_the_whole_brake_shape(client):
+    """All four markers travel, not just the one the old payload carried.
+
+    The corner panel compares the trail lengths, and a key missing from the
+    response arrives as `undefined` and renders as a dash - which reads as
+    "this lap did not brake" rather than "the server never sent it".
+    """
+    body = client.get(
+        "/api/compare",
+        params={"reference": "monza_q_3laps.duckdb", "reference_lap": 2,
+                "other": "monza_q_3laps.duckdb", "other_lap": 1},
+    ).json()
+    keys = ("brake_point_m", "brake_peak_m", "brake_release_m", "trail_length_m")
+    for corner in body["corners"]:
+        for side in ("reference", "other"):
+            assert all(key in corner[side] for key in keys), corner[side].keys()
+
+    braked = [
+        c for c in body["corners"] if c["reference"]["brake_point_m"] is not None
+    ]
+    assert braked, "a Monza lap brakes somewhere"
+    assert all(c["reference"]["trail_length_m"] >= 0.0 for c in braked)
+
+
 def test_every_corner_of_a_comparison_carries_the_three_distances(client):
     """The corner map marks the apex, and read it off the comparison's own
     corner - which did not carry one. `undefined` divided by a metres-per-point
