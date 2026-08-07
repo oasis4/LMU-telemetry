@@ -7,15 +7,16 @@ The reference lap is built through the ordinary pipeline, so the corner list
 and the distance grid the overlay works on are the same objects the browser
 view works on - not a second copy that could drift from it.
 
-Only ``--replay`` is wired up as a source today. The live one arrives with
-``live.sharedmem``, which needs the rF2 Shared Memory Map Plugin installed
-into Le Mans Ultimate; see the plan under docs/superpowers/plans/.
+Without ``--replay`` it reads the running game instead. ``--probe`` prints raw
+frames and exits, which is how the shared-memory transcription gets checked
+against a real session.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -51,9 +52,71 @@ def _trace_of(path: Path, lap_number: int | None):
         return build_trace(session, lap, model.track_length_m), model, lap
 
 
+def _from_game(live):
+    """Samples from the running game, each with the lap it belongs to.
+
+    Frames the reader refuses - in the menus, or a distance that jumped - are
+    skipped rather than passed on. A refused frame is not a gap in the lap;
+    the next good one lands on the grid where it belongs.
+    """
+    with live:
+        while True:
+            got = live.sample()
+            if got is None:
+                time.sleep(0.02)
+                continue
+            yield got
+            # The game writes at about 50 Hz. Polling much faster only returns
+            # the same frame again, which `LapBuffer.add` would discard anyway.
+            time.sleep(0.01)
+
+
+def _from_replay(trace, speed: float, lap_number: int):
+    """The same shape, from a recording: one lap, so one lap number."""
+    for sample in replay(trace, speed=speed):
+        yield sample, lap_number
+
+
+def _probe(seconds: float = 20.0) -> int:
+    """Print what the game is reporting, so the transcription can be checked.
+
+    Speed must agree with the game's own readout and distance must climb
+    smoothly to the track length and reset. Anything else means the structs in
+    :mod:`live.sharedmem` do not match the installed version - which does not
+    announce itself any other way, because a wrong layout returns numbers that
+    look like numbers.
+    """
+    from .sharedmem import LiveTelemetry, SharedMemoryUnavailable
+
+    try:
+        live = LiveTelemetry()
+    except SharedMemoryUnavailable as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+
+    print("reading LMU_Data - drive, and watch that these move sensibly")
+    print(f"{'lap':>4} {'dist m':>9} {'km/h':>7} {'thr':>5} {'brk':>5} {'steer':>6}")
+    started = time.perf_counter()
+    with live:
+        while time.perf_counter() - started < seconds:
+            got = live.sample()
+            if got is None:
+                print("  (no car - in the menus, or the frame was refused)")
+            else:
+                s, lap = got
+                print(
+                    f"{lap:>4} {s.distance_m:>9.1f} {s.speed_kmh:>7.1f} "
+                    f"{s.throttle:>5.2f} {s.brake:>5.2f} {s.steering:>6.2f}"
+                )
+            time.sleep(0.25)
+    return 0
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(prog="lmu_telemetry.live", description=__doc__)
-    parser.add_argument("--reference", type=Path, required=True,
+    parser.add_argument("--probe", action="store_true",
+                        help="print raw frames from the running game and exit")
+    parser.add_argument("--reference", type=Path,
                         help="recording holding the lap to be measured against")
     parser.add_argument("--reference-lap", type=int, default=None,
                         help="lap number in that recording (default: its fastest)")
@@ -66,21 +129,34 @@ def main(argv: "list[str] | None" = None) -> int:
                         help="print findings only, do not open the panel")
     args = parser.parse_args(argv)
 
-    if args.replay is None:
-        parser.error(
-            "--replay is required: the live shared-memory source is not built "
-            "yet. It needs rF2SharedMemoryMapPlugin64.dll in <LMU>\\Bin64\\Plugins\\."
-        )
+    if args.probe:
+        return _probe()
+    if args.reference is None:
+        parser.error("--reference is required unless --probe is given")
 
     reference, model, reference_lap = _trace_of(args.reference, args.reference_lap)
-    driven, _model, driven_lap = _trace_of(args.replay, args.replay_lap)
     print(
         f"reference: {args.reference.name} lap {reference_lap.number} "
         f"({reference_lap.duration_s:.3f} s)\n"
-        f"driving:   {args.replay.name} lap {driven_lap.number} "
-        f"({driven_lap.duration_s:.3f} s)\n"
         f"{model.track_length_m / 1000:.3f} km, {len(model.corners)} corners"
     )
+
+    if args.replay is not None:
+        driven, _model, driven_lap = _trace_of(args.replay, args.replay_lap)
+        print(
+            f"driving:   {args.replay.name} lap {driven_lap.number} "
+            f"({driven_lap.duration_s:.3f} s)"
+        )
+        source = _from_replay(driven, args.speed, driven_lap.number)
+    else:
+        from .sharedmem import LiveTelemetry, SharedMemoryUnavailable
+
+        try:
+            source = _from_game(LiveTelemetry())
+        except SharedMemoryUnavailable as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+        print("driving:   the running game")
 
     overlay = None
     if not args.no_window:
@@ -90,9 +166,18 @@ def main(argv: "list[str] | None" = None) -> int:
 
     buffer = LapBuffer(reference.grid)
     watch = CornerWatch(reference, model.corners)
-    drawn_at = -1.0
+    drawn_at = 0.0
+    on_lap = None
 
-    for sample in replay(driven, speed=args.speed):
+    for sample, lap in source:
+        if lap != on_lap:
+            # A new lap. The buffer and the watch both start again; the watch
+            # keeps its reference metrics, which have not changed.
+            if on_lap is not None:
+                print(f"  -- lap {lap} --")
+            on_lap = lap
+            buffer.reset()
+            watch.reset()
         buffer.add(sample)
 
         for finding in watch.advance(buffer):
@@ -108,15 +193,18 @@ def main(argv: "list[str] | None" = None) -> int:
             if overlay is not None:
                 overlay.show_finding(corner.name, tip.headline if tip else None)
 
-        if overlay is not None and sample.time_s - drawn_at >= 1.0 / REDRAW_HZ:
-            drawn_at = sample.time_s
+        # Paced on the wall clock, not on lap time: lap time restarts at every
+        # line, and a replay running at 40x would redraw 40 times as often as
+        # a driver can read.
+        now = time.perf_counter()
+        if overlay is not None and now - drawn_at >= 1.0 / REDRAW_HZ:
+            drawn_at = now
             # Where the reference was in time when it reached here. Positive
             # means this lap took longer to get to the same piece of track.
             was = float(np.interp(sample.distance_m, reference.grid, reference.time_s))
             overlay.show_delta(sample.time_s - was)
             overlay.pump()
 
-    print(f"lap done: {driven_lap.duration_s - reference_lap.duration_s:+.3f} s")
     if overlay is not None:
         overlay.close()
     return 0

@@ -19,11 +19,30 @@ shown, not when it is decided.
 
 ## Data source
 
-LMU runs on the rFactor 2 engine and exposes live state through the **rF2
-Shared Memory Map Plugin** (TheIronWolf), the same interface SimHub and
-friends use.
+**Corrected once the install was actually examined.** This section first said
+to use the third-party rF2 Shared Memory Map Plugin. That is unnecessary: LMU
+ships its own plugin SDK at `<LMU install>\Support\SharedMemoryInterface\`
+and publishes its whole state into one mapping, `LMU_Data`. No third-party
+DLL is needed at all, and the driver has to install nothing.
 
-- `rF2SharedMemoryMapPlugin64.dll` in `<LMU install>\Bin64\Plugins\`
+Two further details the first draft had wrong, both of which would have cost
+an afternoon:
+
+- Plugins live in `<LMU install>\Plugins\`, not `Bin64\Plugins\`. That is the
+  rFactor 2 layout, not LMU's.
+- `InternalsPlugin.hpp` wraps its structs in `#pragma pack(push, 4)`. At
+  natural alignment every `double` after a 4-byte field lands four bytes late,
+  and the values that come back are finite, plausible, and wrong.
+
+Using the game's own headers also settles a version question the third-party
+route could not. LMU's `TelemInfoV01` carries `mDeltaBest`,
+`mBatteryChargeFraction` and the boost-motor fields where published rF2
+transcriptions show one long padding array — so a plugin-shaped struct read
+against this game would be misaligned from that point on.
+
+The old route, for the record:
+
+- `rF2SharedMemoryMapPlugin64.dll` in `<LMU install>\Plugins\`
 - Enabled in LMU under Settings → Plugins
 - Section `$rFactor2SMMP_Telemetry$`, ~50 Hz — `mElapsedTime`, `mDeltaTime`,
   `mLapNumber`, `mUnfilteredThrottle`, `mUnfilteredBrake`,
@@ -46,9 +65,14 @@ so error cannot accumulate over a lap.
 
 Read with `mmap` + `ctypes`. No new third-party dependency.
 
-**The plugin is the user's to install.** It is a third-party DLL going into a
-game install, and this project will not fetch or place it. The overlay must
-detect its absence and say so plainly rather than showing a dead panel.
+**Nothing has to be installed.** The mapping is the game's own. What the
+overlay must still do is detect its absence — the game not running, or not in
+a session — and say so plainly rather than showing a dead panel.
+
+**And it must detect a layout it does not match.** The game creates the
+mapping at `sizeof(SharedMemoryLayout)`; if the transcribed structs disagree,
+opening fails outright. A wrong layout is the one failure mode here that does
+not announce itself, because it returns numbers that look like numbers.
 
 ## The architectural point
 
