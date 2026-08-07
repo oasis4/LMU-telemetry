@@ -403,7 +403,14 @@ def advice(comparisons, count: int = 4) -> "list[Advice]":
         if item is None:
             continue
         point = comparison.reference.brake_point_m
-        about_braking = "brake point" in item.because
+        # Every brake-shape rule reads that one application, so any of them
+        # naming it is a finding about it - not only the two that happen to
+        # print "brake point". Left as that one phrase, the pressure and trail
+        # rules walked straight past this guard.
+        about_braking = any(
+            phrase in item.because
+            for phrase in ("brake point", "brake peak", "trail length")
+        )
         if about_braking and point is not None:
             if any(abs(point - cited) < SAME_BRAKING_M for cited in braking_cited):
                 continue

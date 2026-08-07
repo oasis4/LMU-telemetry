@@ -415,6 +415,38 @@ def test_one_braking_event_produces_one_piece_of_advice():
     assert len(braking) == 1, [a.corner.name for a in braking]
 
 
+def test_one_braking_event_produces_one_finding_whatever_names_it():
+    """The Ascari guard has to see the shape rules, not only "brake point".
+
+    Both corners resolve the same brake application, so both report the same
+    late peak. The guard keyed on the phrase "brake point", and the pressure
+    and trail rules do not print it - so one stop came back as two findings.
+    """
+    corners = [
+        Corner(index=1, name="Ascari 1", start_m=900.0, apex_m=930.0, end_m=960.0,
+               radius_m=80.0, heading_deg=90.0, direction="L"),
+        Corner(index=2, name="Ascari 2", start_m=960.0, apex_m=990.0, end_m=1020.0,
+               radius_m=80.0, heading_deg=90.0, direction="R"),
+    ]
+    speed = np.full(len(grid_for(LAP_M)), 200.0)
+    speed[_index(900.0) : _index(1020.0)] = 110.0
+    slow = speed.copy()
+    slow[_index(900.0) : _index(1020.0)] = 85.0
+
+    found = advice(
+        compare_corners(
+            _trace(brake=_trail_brake(800.0, 812.0, 900.0), speed_kmh=speed),
+            _trace(brake=_trail_brake(800.0, 860.0, 900.0), speed_kmh=slow),
+            corners,
+        )
+    )
+    braking = [
+        a for a in found
+        if any(p in a.because for p in ("brake point", "brake peak", "trail length"))
+    ]
+    assert len(braking) == 1, [(a.corner.name, a.because) for a in braking]
+
+
 def test_two_separate_braking_events_both_get_advice():
     """The guard must not silence a genuinely different corner."""
     corners = [
