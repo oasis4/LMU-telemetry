@@ -202,8 +202,11 @@ const apexPoint = computed(() => {
  * would turn the picture into a legend-reading exercise; drawn heavier on the
  * lap's own line it stays obvious whose braking it is and exactly where. */
 .braking { fill: none; stroke-linecap: butt; stroke-linejoin: round; }
-.braking.reference { stroke: var(--reference); stroke-width: 6; }
-.braking.other { stroke: var(--compared); stroke-width: 7; }
+/* The reference is the wider of the two and drawn first, so where both laps
+ * brake over the same stretch - which is the usual case - it reads as a halo
+ * round the compared lap. Equal widths hid it completely underneath. */
+.braking.reference { stroke: var(--reference); stroke-width: 13; }
+.braking.other { stroke: var(--compared); stroke-width: 6; }
 /* The dot sits at the first metre on the pedal - the brake point itself. */
 .brake-start.reference { fill: var(--reference); }
 .brake-start.other { fill: var(--compared); }

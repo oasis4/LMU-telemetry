@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ..cache.store import ArrayCache, CacheError, SummaryCache, source_key
 from ..core import Session, build_trace, clean_laps, compare_corners, delta_s
 from ..core.coaching import advice
-from ..core.metrics import BRAKE_ON
+from ..core.metrics import BRAKE_ON, braking_zones
 from ..core.trace import LapTrace, TraceError
 from .decimate import TARGET_POINTS, decimate
 from .pool import SessionPool
@@ -492,19 +492,32 @@ def create_app(
             # different one would shade a stretch that disagrees with the
             # figure printed beside it.
             "brake_on": BRAKE_ON,
+            # Where each lap was on the brakes, as (from, to) in metres.
+            # Measured on the full trace even when the series below are
+            # decimated: decimation keeps the samples where the delta turns,
+            # so a short brush of the brakes can fall between two kept samples
+            # and disappear from a map drawn client-side.
+            "braking": {
+                "reference": [
+                    [round(a, 1), round(b, 1)] for a, b in braking_zones(a)
+                ],
+                "other": [
+                    [round(a, 1), round(b, 1)] for a, b in braking_zones(b)
+                ],
+            },
             "resolution": "full" if full else f"~{TARGET_POINTS} points",
             "samples": len(sent["distance_m"]),
             "series": {k: _series(v) for k, v in sent.items()},
             "advice": [
                 {
-                    "corner": a.corner.index,
-                    "name": a.corner.name,
-                    "headline": a.headline,
-                    "detail": a.detail,
-                    "because": a.because,
-                    "lost_s": round(a.lost_s, 3),
+                    "corner": tip.corner.index,
+                    "name": tip.corner.name,
+                    "headline": tip.headline,
+                    "detail": tip.detail,
+                    "because": tip.because,
+                    "lost_s": round(tip.lost_s, 3),
                 }
-                for a in advice(comparisons)
+                for tip in advice(comparisons)
             ],
             "corners": [{
                 "index": c.corner.index,

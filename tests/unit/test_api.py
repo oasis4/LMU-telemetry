@@ -177,6 +177,26 @@ def test_a_comparison_says_what_counts_as_braking(client):
     assert body["brake_on"] == BRAKE_ON
 
 
+def test_a_comparison_says_where_each_lap_was_on_the_brakes(client):
+    """As distance ranges, measured on the full trace. The map draws these, so
+    they must survive the decimation the series beside them go through: that
+    keeps the samples where the delta turns, and a short brush of the brakes
+    can fall between two of them and disappear."""
+    params = {"reference": "monza_q_3laps.duckdb", "reference_lap": 2,
+              "other": "monza_q_3laps.duckdb", "other_lap": 1}
+    small = client.get("/api/compare", params=params).json()
+    whole = client.get("/api/compare", params={**params, "full": "true"}).json()
+
+    for side in ("reference", "other"):
+        zones = small["braking"][side]
+        assert zones, f"a Monza lap brakes somewhere ({side})"
+        assert zones == whole["braking"][side], "the zones changed with the resolution"
+        for first, last in zones:
+            assert 0.0 <= first < last
+        for (_, ends), (starts, _) in zip(zones, zones[1:]):
+            assert ends < starts, "zones must not touch or overlap"
+
+
 def test_a_comparison_carries_every_input_for_both_laps(client):
     """The corner overlay draws the pedals and the wheel together; a response
     carrying only the brake makes each of the others a round trip per corner."""

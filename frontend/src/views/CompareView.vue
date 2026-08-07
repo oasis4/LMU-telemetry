@@ -134,6 +134,7 @@ watch(comparison, (found) => {
               v-if="trackMap"
               :map="trackMap"
               :losses="losses"
+              :braking="comparison.braking ?? null"
               :selected="selectedCorner?.index ?? null"
               @select="pickCorner"
             />

@@ -46,6 +46,34 @@ class CornerMetrics:
     time_s: float
 
 
+def braking_zones(
+    trace: LapTrace, threshold: float = BRAKE_ON
+) -> "list[tuple[float, float]]":
+    """Every stretch of the lap the car spent on the brakes, in metres.
+
+    Measured here rather than in the client, and from the full trace rather
+    than the decimated one a page is sent. Decimation keeps the samples where
+    the *delta* turns, so a short brush of the brakes can fall between two
+    kept samples and vanish - a map drawn from it would show no braking where
+    there was some, and say nothing about it.
+
+    Two applications inside one corner stay two zones. Merged, a map draws a
+    band straight across the stretch the driver was off the pedal, which is
+    the part worth seeing.
+
+    A lone sample over the threshold is not a zone. At a 2 m grid that is a
+    twitch, and drawn it becomes a dot claiming a brake point that was never
+    applied.
+    """
+    grid = trace.grid
+    zones = []
+    for first, last in _runs(np.asarray(trace.brake, dtype=np.float64) > threshold):
+        if last == first:
+            continue
+        zones.append((float(grid[first]), float(grid[last])))
+    return zones
+
+
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     """Contiguous stretches where *mask* is true, as (first, last) pairs."""
     runs, i = [], 0

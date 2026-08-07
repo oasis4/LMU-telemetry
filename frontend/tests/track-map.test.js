@@ -129,3 +129,76 @@ describe('the track map', () => {
     expect(wrapper.find('circle.start').exists()).toBe(true)
   })
 })
+
+describe('showing where the brakes went on', () => {
+  const braking = {
+    reference: [[900, 1100]],
+    other: [[850, 1050], [1500, 1600]],
+  }
+  const withBraking = (extra = {}) =>
+    mount(TrackMap, { props: { map: squareMap([corner(1, [[80, 120]])]), braking, ...extra } })
+
+  it('offers the choice only when there is braking to show', () => {
+    const without = mount(TrackMap, { props: { map: squareMap() } })
+    expect(without.findAll('.modes button')).toHaveLength(0)
+    expect(withBraking().findAll('.modes button').map((b) => b.text()))
+      .toEqual(['time lost', 'braking'])
+  })
+
+  it('shows time lost until asked for braking', () => {
+    const wrapper = withBraking()
+    expect(wrapper.findAll('path.braking')).toHaveLength(0)
+  })
+
+  it('draws every zone of both laps once asked', async () => {
+    const wrapper = withBraking()
+    await wrapper.findAll('.modes button')[1].trigger('click')
+    expect(wrapper.findAll('path.braking.reference')).toHaveLength(1)
+    expect(wrapper.findAll('path.braking.other')).toHaveLength(2)
+    expect(wrapper.findAll('circle.brake-start')).toHaveLength(3)
+  })
+
+  it('lays the reference down first, so the compared lap sits on top of it', async () => {
+    // Both laps brake for the same corner, so the two zones overlap almost
+    // exactly. Drawn in the other order - and at equal widths - the reference
+    // disappeared underneath and the map showed one lap while claiming two.
+    // The widths live in scoped CSS, which jsdom does not apply; what can be
+    // asserted here is the paint order that makes those widths readable.
+    const wrapper = withBraking()
+    await wrapper.findAll('.modes button')[1].trigger('click')
+    const drawn = [...wrapper.element.querySelectorAll('path.braking')]
+      .map((p) => (p.getAttribute('class').includes('reference') ? 'reference' : 'other'))
+    expect(drawn.indexOf('other')).toBeGreaterThan(drawn.lastIndexOf('reference'))
+  })
+
+  it('stops colouring corners by time while showing braking', async () => {
+    // Two meanings on one stroke: the corner colouring already spends hue and
+    // width on time lost, and braking over it would read as part of that.
+    const wrapper = mount(TrackMap, {
+      props: { map: squareMap([corner(1, [[80, 120]])]), braking, losses: { 1: 0.5 } },
+    })
+    expect(wrapper.find('path.corner').classes()).toContain('loss')
+    await wrapper.findAll('.modes button')[1].trigger('click')
+    expect(wrapper.find('path.corner').classes()).toContain('quiet')
+    expect(wrapper.find('path.corner').classes()).not.toContain('loss')
+  })
+
+  it('says which lap braked where, and for how long', async () => {
+    const wrapper = withBraking()
+    await wrapper.findAll('.modes button')[1].trigger('click')
+    const titles = wrapper.findAll('path.braking title').map((t) => t.text())
+    expect(titles).toContain('reference — brakes at 900 m for 200 m')
+    expect(titles).toContain('compared — brakes at 1500 m for 100 m')
+  })
+
+  it('draws a zone shorter than the map’s own spacing rather than nothing', async () => {
+    // A 4000 m circuit on 400 points is 10 m per point, so a 2 m dab rounds
+    // to one index at both ends - and `M x,y` with nothing after it draws
+    // nothing at all, while the dot beside it still claims a brake point.
+    const wrapper = mount(TrackMap, {
+      props: { map: squareMap(), braking: { reference: [[1000, 1002]], other: [] } },
+    })
+    await wrapper.findAll('.modes button')[1].trigger('click')
+    expect(wrapper.find('path.braking.reference').attributes('d')).toMatch(/L/)
+  })
+})

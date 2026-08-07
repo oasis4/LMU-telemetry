@@ -39,6 +39,14 @@ def _trace(speed_kmh=None, throttle=None, brake=None, pace_kmh=150.0) -> LapTrac
     )
 
 
+
+def _real_trace(path, lap_number: int):
+    """A real lap of a committed fixture, on its own track's grid."""
+    with Session.open(path) as session:
+        model = build_track_model([session])
+        lap = next(l for l in session.laps if l.number == lap_number)
+        return build_trace(session, lap, model.track_length_m), lap
+
 def _index(distance_m: float) -> int:
     return int(distance_m / GRID_STEP_M)
 
@@ -168,3 +176,56 @@ def test_metrics_over_a_real_lap_are_physically_ordered(corpus_dir):
             if m.brake_point_m is not None:
                 braked += 1
     assert braked >= 5, f"only {braked} corners of Monza showed any braking"
+
+
+# -- braking zones ---------------------------------------------------------
+
+def test_braking_zones_are_the_stretches_the_pedal_was_down(monza_q_file):
+    from lmu_telemetry.core.metrics import braking_zones
+
+    trace, _ = _real_trace(monza_q_file, 2)
+    zones = braking_zones(trace)
+    assert zones, "a Monza lap brakes somewhere"
+    for start_m, end_m in zones:
+        assert 0.0 <= start_m < end_m <= trace.grid[-1] + GRID_STEP_M
+
+
+def test_a_braking_zone_covers_only_metres_that_were_braked(monza_q_file):
+    """Every metre inside a zone must be over the threshold, and every metre
+    over the threshold must be inside one. A zone that merely brackets the
+    braking would look right on a map and be wrong by a hundred metres."""
+    from lmu_telemetry.core.metrics import BRAKE_ON, braking_zones
+
+    trace, _ = _real_trace(monza_q_file, 2)
+    inside = np.zeros(len(trace.grid), dtype=bool)
+    for start_m, end_m in braking_zones(trace):
+        inside |= (trace.grid >= start_m) & (trace.grid <= end_m)
+    on = trace.brake > BRAKE_ON
+    # A single sample on its own is dropped - see the test below - so the
+    # zones may miss those, but must never claim a metre that was not braked.
+    assert not np.any(inside & ~on), "a zone covers metres the car was not braking"
+    assert np.sum(on & ~inside) <= np.sum(on) * 0.02
+
+
+def test_two_applications_stay_two_zones(monza_q_file):
+    """A lift and a re-application inside one braking event are two zones.
+    Merged, a map draws a band across the part the driver was off the pedal."""
+    from lmu_telemetry.core.metrics import braking_zones
+
+    trace, _ = _real_trace(monza_q_file, 2)
+    zones = braking_zones(trace)
+    gaps = [b[0] - a[1] for a, b in zip(zones, zones[1:])]
+    assert all(gap > 0 for gap in gaps), "zones overlap or touch"
+
+
+def test_a_single_sample_over_the_threshold_is_not_a_zone():
+    """Two metres of grid is a twitch of the pedal, not a braking zone, and it
+    draws as a dot claiming a brake point that was never applied."""
+    from lmu_telemetry.core.metrics import braking_zones
+
+    brake = np.zeros(len(grid_for(LAP_M)))
+    brake[100] = 0.9                      # one sample
+    brake[200:210] = 0.9                  # a real application
+    zones = braking_zones(_trace(brake=brake))
+    assert len(zones) == 1
+    assert zones[0][0] == pytest.approx(200 * GRID_STEP_M)
