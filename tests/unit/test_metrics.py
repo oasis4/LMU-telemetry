@@ -266,6 +266,42 @@ def test_the_trail_of_a_corner_across_the_start_finish_line_is_not_a_lap_long():
     assert 0.0 <= m.trail_length_m < 200.0, m.trail_length_m
 
 
+def test_the_brake_markers_of_a_real_lap_are_physically_ordered(monza_q_file):
+    """Pressure up, then peak, then release.
+
+    Nothing in the implementation enforces that order - the peak is an argmax
+    and the release a threshold crossing - so it falls out only if the windows
+    they are read over are right.
+    """
+    with Session.open(monza_q_file) as session:
+        model = build_track_model([session])
+        lap = next(l for l in session.laps if l.number == 2)
+        trace = build_trace(session, lap, model.track_length_m)
+        measured = [corner_metrics(trace, corner) for corner in model.corners]
+
+    braked = [m for m in measured if m.brake_point_m is not None]
+    assert len(braked) >= 5, f"only {len(braked)} corners of Monza showed braking"
+    for m in braked:
+        assert m.brake_peak_m is not None
+        assert m.brake_release_m is not None
+        assert m.trail_length_m is not None and m.trail_length_m >= 0.0
+        if m.corner.start_m < m.corner.end_m:      # not one across the line
+            assert m.brake_point_m <= m.brake_peak_m <= m.brake_release_m, m
+
+
+def test_real_trail_lengths_are_not_all_the_same(monza_q_file):
+    """A marker that comes back constant discriminates nothing, and every
+    comparison built on it would be a comparison of zero."""
+    with Session.open(monza_q_file) as session:
+        model = build_track_model([session])
+        lap = next(l for l in session.laps if l.number == 2)
+        trace = build_trace(session, lap, model.track_length_m)
+        measured = [corner_metrics(trace, corner) for corner in model.corners]
+
+    lengths = [m.trail_length_m for m in measured if m.trail_length_m is not None]
+    assert len(set(lengths)) > 1, lengths
+
+
 # -- braking zones ---------------------------------------------------------
 
 def test_braking_zones_are_the_stretches_the_pedal_was_down(monza_q_file):

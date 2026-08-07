@@ -359,6 +359,31 @@ def test_advice_is_ordered_worst_corner_first():
     assert [a.corner.index for a in found] == [2, 1]
 
 
+def test_brake_shape_advice_on_real_laps_always_carries_an_outcome(monza_q_file):
+    """Real pedal traces, not the clean trapezoids the rest of this file builds.
+
+    A trail or pressure sentence with no speed behind it is the failure this
+    whole feature is arranged to avoid, so it is checked where the brake
+    channel is noisy and the release is a real taper.
+    """
+    with Session.open(monza_q_file) as session:
+        model = build_track_model([session])
+        laps = {lap.number: lap for lap in session.laps}
+        reference = build_trace(session, laps[2], model.track_length_m)
+        other = build_trace(session, laps[1], model.track_length_m)
+        found = advice(compare_corners(reference, other, model.corners))
+
+    shape = [
+        tip for tip in found
+        if "trail length" in tip.because or "brake peak" in tip.because
+    ]
+    assert shape, "these two laps differ enough that a shape rule should fire"
+    for tip in shape:
+        assert "minimum speed" in tip.because or "exit speed" in tip.because, (
+            tip.headline, tip.because
+        )
+
+
 @pytest.mark.corpus
 def test_advice_on_real_laps_never_speaks_without_evidence(corpus_dir):
     path = corpus_dir / "Autodromo Nazionale Monza_R_2026-04-04T19_41_31Z.duckdb"

@@ -904,8 +904,14 @@ git commit -m "Send and show how long the brake was trailed"
 ### Task 9: Check it against real laps
 
 The unit tests are built from synthetic traces with clean trapezoid brake
-traces. Real pedal data is noisy, and the corpus test is what says whether the
-thresholds hold up on it.
+traces. Real pedal data is noisy, and this is what says whether the thresholds
+hold up on it.
+
+**Deviation from the original plan:** these were written against the corpus
+(`corpus_dir`, `@pytest.mark.corpus`). `data/sessions` is not present in this
+checkout, so such a test would always skip - and a skip reads as a pass while
+covering nothing. They run against the committed `monza_q_file` fixture
+instead, which carries three real laps of Monza with real pedal traces.
 
 **Files:**
 - Test: `tests/unit/test_advice.py`
