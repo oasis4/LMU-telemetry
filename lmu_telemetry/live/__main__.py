@@ -25,6 +25,7 @@ from ..core.session import Session
 from ..core.track_model import build_track_model
 from ..core.trace import build_trace
 from .buffer import LapBuffer
+from .overlay import POSITIONS
 from .replay import replay
 from .watch import CornerWatch
 
@@ -127,6 +128,11 @@ def main(argv: "list[str] | None" = None) -> int:
                         help="replay pace; 1.0 is real time")
     parser.add_argument("--no-window", action="store_true",
                         help="print findings only, do not open the panel")
+    parser.add_argument("--position", default="top-center", choices=POSITIONS,
+                        help="where the panel sits (default: top-center, which "
+                             "is the only corner-free choice on a wide screen)")
+    parser.add_argument("--scale", type=float, default=1.0,
+                        help="size multiplier on top of the screen-derived one")
     args = parser.parse_args(argv)
 
     if args.probe:
@@ -162,7 +168,7 @@ def main(argv: "list[str] | None" = None) -> int:
     if not args.no_window:
         from .overlay import Overlay
 
-        overlay = Overlay()
+        overlay = Overlay(position=args.position, scale=args.scale)
 
     buffer = LapBuffer(reference.grid)
     watch = CornerWatch(reference, model.corners)
