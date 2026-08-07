@@ -556,15 +556,46 @@ guard against that is a size self-check: a transcribed struct whose
 `ctypes.sizeof` does not match the mapping must fail loudly, because a struct
 off by one field returns plausible-looking garbage.
 
+**Corrected after reading the plugin's actual layout.** An earlier draft had
+`mLapDist` in the telemetry buffer at 50 Hz. It is not there — it is a
+`c_double` on `rF2VehicleScoring`, in the 5 Hz scoring mapping. Both mappings
+must therefore be read, and distance must be carried between scoring ticks
+rather than sampled. See the spec's "Correction to an earlier draft".
+
 - [ ] **Step 1: Transcribe the structs**
 
 Take the layout from TheIronWolf's `rF2Data.h` at the plugin version installed
-(`rF2SharedMemoryMapPlugin64.dll`, Settings → Plugins in LMU). Transcribe
-`rF2Vec3`, `rF2VehicleTelemetry`, and `rF2Telemetry` in field order — the whole
-struct, not a subset, because ctypes computes offsets from what precedes a
-field and a skipped field silently shifts every one after it.
+(`rF2SharedMemoryMapPlugin64.dll`, Settings → Plugins in LMU), or from the
+ctypes transcription in `TonyWhitley/pyRfactor2SharedMemory/rF2data.py`.
+Needed: `rF2Vec3`, `rF2Wheel`, `rF2VehicleTelemetry`, `rF2Telemetry`,
+`rF2ScoringInfo`, `rF2VehicleScoring`, `rF2Scoring`. `MAX_MAPPED_VEHICLES` is
+128.
 
-Do not write this from memory. Read the header.
+Transcribe **whole** structs, not the subset of fields that look useful.
+ctypes computes every offset from what precedes it, so one skipped field
+shifts everything after it and returns values that are the right type, the
+right order of magnitude, and wrong.
+
+Do not write this from memory. Read the source.
+
+- [ ] **Step 1b: Find the player's car**
+
+Both mappings are arrays of 128 vehicles. The player's entry is the one whose
+`rF2VehicleScoring.mIsPlayer` is set; its `mID` is what matches the
+corresponding `rF2VehicleTelemetry`. Index 0 is not the player and assuming it
+is produces a panel that silently coaches somebody else.
+
+- [ ] **Step 1c: Carry the distance**
+
+    distance = anchor_lap_dist + integral of speed dt since the anchor
+
+Re-anchor whenever `rF2Scoring.mVersionUpdateEnd` advances, which is the
+plugin's own signal that the buffer holds a new, complete frame. Anchoring on
+every tick means drift cannot accumulate: each scoring update replaces the
+dead-reckoned value outright rather than correcting it.
+
+Read the version counters before *and* after copying a buffer and retry when
+they differ, which is how the plugin signals a torn read.
 
 - [ ] **Step 2: Write the reader**
 

@@ -1,12 +1,21 @@
 """One lap being driven, filled onto the track's grid as it goes.
 
-The offline pipeline's hardest step - reconstructing progress from a 10 Hz
-``Lap Dist`` that wobbles backwards, sometimes by metres - has no counterpart
-here. Shared memory reports distance along the lap directly at about 50 Hz,
-which at every speed the car reaches is finer than the 2 m grid: 1.1 m between
-samples at 200 km/h, 1.8 m at 330. So the grid is filled by interpolating
-those samples onto it, exactly as :func:`trace._on_grid` does offline, and not
-by any new scheme.
+Distance is the awkward axis here too, for its own reason. The rF2 plugin
+splits its state across two mappings, and they do not run at the same rate:
+pedals, speed and elapsed time arrive in the telemetry buffer at about 50 Hz,
+but ``mLapDist`` - how far round the lap the car is - lives in the *scoring*
+buffer at about 5 Hz. At 90 m/s that is 18 m between distance readings, which
+is coarser than this grid and coarser than the 10 Hz ``Lap Dist`` the offline
+pipeline works from.
+
+So distance is not read; it is carried. :mod:`live.sharedmem` anchors on
+``mLapDist`` each time scoring advances and dead-reckons from speed in
+between, which is accurate because speed *is* sampled at 50 Hz and the gap
+being integrated over is 200 ms.
+
+None of that is this module's problem: a :class:`LiveSample` arrives with its
+distance already settled. What happens here is only the interpolation onto the
+grid, exactly as :func:`trace._on_grid` does offline, and by no new scheme.
 
 Grid points ahead of the car hold the last value seen, because that is what
 ``np.interp`` does outside its input range. That is safe only because nothing

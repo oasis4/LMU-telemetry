@@ -23,7 +23,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..core.coaching import Advice, CornerComparison, advise_on, corner_comparison
+from ..core.coaching import (
+    SAME_BRAKING_M,
+    Advice,
+    CornerComparison,
+    advise_on,
+    corner_comparison,
+    names_braking,
+)
 from ..core.corners import Corner
 from ..core.metrics import CornerMetrics, corner_metrics
 from ..core.trace import LapTrace
@@ -35,10 +42,24 @@ class Finding:
     """One completed corner: what was measured, and what to say about it."""
 
     comparison: CornerComparison
-    #: ``None`` where the measurements do not agree on a story, which is the
-    #: normal outcome and not a failure. The comparison is still here: the
-    #: numbers are the honest answer when no sentence is.
+    #: What the rules make of this corner on its own. ``None`` where the
+    #: measurements do not agree on a story, which is the normal outcome and
+    #: not a failure - the comparison is still here, because the numbers are
+    #: the honest answer when no sentence is.
     advice: Advice | None
+    #: Set when *advice* is about a braking event this lap has already named.
+    #: Monza's Ascari is three corners and one stop.
+    repeats_braking: bool = False
+
+    @property
+    def to_say(self) -> Advice | None:
+        """What the panel should show, which is not always what the rules said.
+
+        A caller that reached for :attr:`advice` directly would coach one brake
+        application three times on the way through Ascari, so the suppression
+        lives here rather than in each caller's memory.
+        """
+        return None if self.repeats_braking else self.advice
 
 
 class CornerWatch:
@@ -54,6 +75,7 @@ class CornerWatch:
         )
         self._next = 0
         self._reference_metrics: dict[int, CornerMetrics] = {}
+        self._braking_named: list[float] = []
 
     def advance(self, buffer: LapBuffer) -> "list[Finding]":
         """Every corner completed since the last call, in the order driven.
@@ -88,12 +110,31 @@ class CornerWatch:
         comparison = corner_comparison(
             corner, reference, driven, lost_s=driven.time_s - reference.time_s
         )
-        return Finding(comparison=comparison, advice=advise_on(comparison))
+        item = advise_on(comparison)
+
+        # The same guard `advice()` applies over a finished lap, kept instead
+        # of sorted: this watch meets corners one at a time and cannot look
+        # ahead, so it remembers which brake applications it has already
+        # spoken about. Keyed on the *reference* brake point, because that is
+        # the one that does not move between laps.
+        repeat = False
+        point = reference.brake_point_m
+        if item is not None and names_braking(item) and point is not None:
+            repeat = any(
+                abs(point - named) < SAME_BRAKING_M for named in self._braking_named
+            )
+            if not repeat:
+                self._braking_named.append(point)
+
+        return Finding(comparison=comparison, advice=item, repeats_braking=repeat)
 
     def reset(self) -> None:
         """A new lap has begun.
 
-        The reference metrics are kept. They are measurements of the reference
-        lap, which is the same lap it was.
+        The reference metrics are kept: they are measurements of the reference
+        lap, which is the same lap it was. Which braking events have been named
+        is not - that is about the lap being driven, and carrying it over would
+        leave the second lap silent about every corner the first one covered.
         """
         self._next = 0
+        self._braking_named.clear()

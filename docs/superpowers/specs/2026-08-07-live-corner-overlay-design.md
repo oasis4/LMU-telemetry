@@ -25,10 +25,24 @@ friends use.
 
 - `rF2SharedMemoryMapPlugin64.dll` in `<LMU install>\Bin64\Plugins\`
 - Enabled in LMU under Settings → Plugins
-- Section `$rFactor2SMMP_Telemetry$`, ~50 Hz — `mLapDist`, `mElapsedTime`,
-  `mUnfilteredThrottle`, `mUnfilteredBrake`, `mUnfilteredSteering`, speed from
-  `mLocalVel`
-- Section `$rFactor2SMMP_Scoring$`, ~5 Hz — lap number, session state
+- Section `$rFactor2SMMP_Telemetry$`, ~50 Hz — `mElapsedTime`, `mDeltaTime`,
+  `mLapNumber`, `mUnfilteredThrottle`, `mUnfilteredBrake`,
+  `mUnfilteredSteering`, speed from `mLocalVel`
+- Section `$rFactor2SMMP_Scoring$`, ~5 Hz — `mLapDist`, session and lap state
+
+**Correction to an earlier draft of this spec.** It claimed `mLapDist` was in
+the telemetry buffer at 50 Hz, and that this made the live path *simpler* than
+the offline one. It is not: `mLapDist` is a field of `rF2VehicleScoring`, in
+the 5 Hz mapping. At 90 m/s that is 18 m between distance readings — coarser
+than the 2 m grid, and coarser than the 10 Hz `Lap Dist` the offline pipeline
+reconstructs progress from. Read straight, it would put brake points out by up
+to a car length and a half, confidently.
+
+So distance is carried rather than read: anchor on `mLapDist` each time the
+scoring buffer's version counter advances, and dead-reckon from speed between
+anchors. That is sound because speed is sampled at 50 Hz and each integration
+spans only 200 ms. The anchor also corrects any drift on every scoring tick,
+so error cannot accumulate over a lap.
 
 Read with `mmap` + `ctypes`. No new third-party dependency.
 
@@ -38,11 +52,14 @@ detect its absence and say so plainly rather than showing a dead panel.
 
 ## The architectural point
 
-The live path must not re-implement a single measurement. `mLapDist` gives
-distance directly, so the awkward part of the offline pipeline — reconstructing
-progress from a wobbling 10 Hz `Lap Dist` — disappears. What remains is
-filling the *same* 2 m grid as the lap goes on, and then calling the *same*
-`corner_metrics` and `_advise` that the post-lap view calls.
+The live path must not re-implement a single measurement. Once a sample
+carries a settled distance, what remains is filling the *same* 2 m grid as the
+lap goes on, and then calling the *same* `corner_metrics` and `_advise` that
+the post-lap view calls.
+
+Getting distance onto each sample is the live path's own problem, and it is
+solved once, in the reader, behind `LiveSample`. Nothing above that layer
+knows or cares that two mappings at two rates were involved.
 
 Two definitions of a brake point would be two answers to one question. There
 is one.

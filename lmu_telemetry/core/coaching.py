@@ -425,6 +425,22 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
 #: once. Half a grid step apart is the same sample.
 SAME_BRAKING_M = 2.0
 
+#: Phrases that mean a piece of advice is about the braking event itself.
+#: Every brake-shape rule reads that one application, so any of them naming it
+#: is a finding about it - not only the two that happen to print "brake point".
+_BRAKING_PHRASES = ("brake point", "brake peak", "trail length")
+
+
+def names_braking(item: Advice) -> bool:
+    """Whether this advice is about the braking, whichever rule produced it.
+
+    Public because both callers that de-duplicate need the same answer: the
+    whole-lap :func:`advice`, and the live overlay's watch, which sees corners
+    one at a time and remembers instead of sorting. Two spellings of this test
+    would be two ideas of what counts as one braking event.
+    """
+    return any(phrase in item.because for phrase in _BRAKING_PHRASES)
+
 
 def advice(comparisons, count: int = 4) -> "list[Advice]":
     """What to try, worst corner first.
@@ -446,15 +462,7 @@ def advice(comparisons, count: int = 4) -> "list[Advice]":
         if item is None:
             continue
         point = comparison.reference.brake_point_m
-        # Every brake-shape rule reads that one application, so any of them
-        # naming it is a finding about it - not only the two that happen to
-        # print "brake point". Left as that one phrase, the pressure and trail
-        # rules walked straight past this guard.
-        about_braking = any(
-            phrase in item.because
-            for phrase in ("brake point", "brake peak", "trail length")
-        )
-        if about_braking and point is not None:
+        if names_braking(item) and point is not None:
             if any(abs(point - cited) < SAME_BRAKING_M for cited in braking_cited):
                 continue
             braking_cited.append(point)

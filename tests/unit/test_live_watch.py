@@ -8,7 +8,12 @@ stopped being true.
 
 import pytest
 
-from lmu_telemetry.core.coaching import advise_on, compare_corners
+from lmu_telemetry.core.coaching import (
+    SAME_BRAKING_M,
+    advise_on,
+    compare_corners,
+    names_braking,
+)
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import build_track_model
 from lmu_telemetry.core.trace import build_trace
@@ -118,6 +123,65 @@ def test_live_time_lost_agrees_with_the_post_lap_figure(two_laps):
             finding.comparison.lost_s,
             offline[index],
         )
+
+
+def test_one_braking_event_is_not_coached_twice(two_laps):
+    """Monza's Ascari is three corners and one stop.
+
+    Offline, `advice()` drops the repeat because it can see the whole lap at
+    once. The watch sees one corner at a time, so it has to remember instead -
+    and it matters more here: a list read afterwards shows plainly that two
+    entries are one braking event, but a panel just says the same sentence
+    twice in two seconds while the driver is trying to drive.
+    """
+    model, fast, slow = two_laps
+    spoken = [f for _at, f in _drive(slow, model.corners, fast) if f.to_say is not None]
+    cited = [
+        f.comparison.reference.brake_point_m
+        for f in spoken
+        if names_braking(f.to_say)
+    ]
+    assert cited, "this pair does produce braking advice, or the test proves nothing"
+    for i, point in enumerate(cited):
+        for earlier in cited[:i]:
+            assert abs(point - earlier) >= SAME_BRAKING_M, [
+                (f.comparison.corner.name, f.to_say.headline) for f in spoken
+            ]
+
+
+def test_a_suppressed_repeat_still_reports_its_corner(two_laps):
+    """Silence about the braking is not the corner going missing. The numbers
+    are still measured and still carried; only the sentence is withheld."""
+    model, fast, slow = two_laps
+    findings = [f for _at, f in _drive(slow, model.corners, fast)]
+    repeats = [f for f in findings if f.advice is not None and f.to_say is None]
+    assert repeats, "Ascari should produce at least one suppressed repeat"
+    for finding in repeats:
+        assert finding.comparison.differences or finding.comparison.lost_s
+
+
+def test_a_new_lap_forgets_which_braking_was_already_named(two_laps):
+    """Or the second lap goes quiet about every corner the first one covered."""
+    model, fast, slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+    buffer = LapBuffer(slow.grid)
+
+    def run_one_lap():
+        buffer.reset()
+        watch.reset()
+        said = []
+        for i in range(len(slow.grid)):
+            buffer.add(
+                LiveSample(
+                    float(slow.grid[i]), float(slow.time_s[i]),
+                    float(slow.speed_kmh[i]), float(slow.throttle[i]),
+                    float(slow.brake[i]), float(slow.steering[i]),
+                )
+            )
+            said.extend(f for f in watch.advance(buffer) if f.to_say is not None)
+        return [f.comparison.corner.index for f in said]
+
+    assert run_one_lap() == run_one_lap()
 
 
 def test_a_new_lap_starts_the_corners_again(two_laps):
