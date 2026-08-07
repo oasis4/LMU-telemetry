@@ -75,6 +75,15 @@ def test_the_block_times_of_one_lap_sum_to_that_lap():
     assert result.ideal_s == pytest.approx(lap.lap.duration_s, abs=1e-6)
 
 
+def test_a_lap_that_cannot_be_cut_still_times_to_its_whole_self():
+    """One block covering the lap. The uncut path is the one nothing else
+    exercises, and it was losing the last grid step - 0.04 s at Monza."""
+    lap = _lap(1, [])                       # never at full throttle
+    result = ideal_lap([lap], CORNERS)
+    assert len(result.blocks) == 1
+    assert result.ideal_s == pytest.approx(lap.lap.duration_s, abs=1e-6)
+
+
 def test_the_ideal_equals_the_only_lap_when_there_is_only_one():
     lap = _lap(1, FLAT)
     result = ideal_lap([lap], CORNERS)

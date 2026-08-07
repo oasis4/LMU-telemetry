@@ -14,6 +14,9 @@ from lmu_telemetry.core.corners import Corner
 from lmu_telemetry.core.geometry import GRID_STEP_M, grid_for
 
 LAP_M = 3000.0
+#: Flat everywhere except through the two corners the tests place at 500 m
+#: and 1500 m.
+FLAT_ISH = [(0.0, 480.0), (600.0, 1480.0), (1600.0, 3000.0)]
 
 
 def _index(distance_m: float) -> int:
@@ -124,3 +127,33 @@ def test_a_lap_with_no_full_throttle_anywhere_is_one_block():
     blocks = split_into_blocks([_trace([])], corners)
     assert len(blocks) == 1
     assert [c.index for c in blocks[0].corners] == [1, 2]
+
+
+def test_the_uncut_block_uses_the_whole_lap_convention():
+    """start == end means "from here the long way round to here".
+
+    Written as 0 to lap_length it looks the same but is not: the grid stops
+    one step short of the length, so the block's own timing then loses that
+    step and the ideal lap comes back short of the lap it was built from.
+    """
+    corners = [_corner(1, 500.0, 560.0), _corner(2, 1500.0, 1560.0)]
+    block = split_into_blocks([_trace([])], corners)[0]
+    assert block.start_m == block.end_m
+
+
+def test_laps_on_different_grids_are_refused():
+    """Two grids mean two tracks, which is what delta_s refuses for the same
+    reason. Left unchecked this indexed one lap's throttle with another lap's
+    window and came out as an IndexError from deep inside numpy.
+    """
+    corners = [_corner(1, 500.0, 560.0), _corner(2, 1500.0, 1560.0)]
+    whole = _trace(FLAT_ISH)
+    from lmu_telemetry.core.trace import LapTrace
+
+    clipped = LapTrace(
+        lap=None, grid=whole.grid[:100], time_s=whole.time_s[:100],
+        speed_kmh=whole.speed_kmh[:100], throttle=whole.throttle[:100],
+        brake=whole.brake[:100], steering=whole.steering[:100],
+    )
+    with pytest.raises(ValueError, match="same grid"):
+        split_into_blocks([whole, clipped], corners)

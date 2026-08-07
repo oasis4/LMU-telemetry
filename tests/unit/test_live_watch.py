@@ -14,6 +14,7 @@ from lmu_telemetry.core.coaching import (
     compare_corners,
     names_braking,
 )
+from lmu_telemetry.core.metrics import APPROACH_M
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import build_track_model
 from lmu_telemetry.core.trace import build_trace
@@ -123,6 +124,55 @@ def test_live_time_lost_agrees_with_the_post_lap_figure(two_laps):
             finding.comparison.lost_s,
             offline[index],
         )
+
+
+def test_joining_a_session_part_way_round_does_not_crash(two_laps):
+    """The overlay is started while the driver is already on track.
+
+    The first sample lands at 3000 m, and every corner behind it is instantly
+    "complete". Measuring one from a buffer holding a single sample raised
+    ValueError out of LapBuffer.trace and took the overlay down before it drew
+    anything.
+    """
+    model, fast, slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+    buffer = LapBuffer(slow.grid)
+    at = int(3000 / 2)
+    buffer.add(
+        LiveSample(
+            float(slow.grid[at]), float(slow.time_s[at]), float(slow.speed_kmh[at]),
+            float(slow.throttle[at]), float(slow.brake[at]), float(slow.steering[at]),
+        )
+    )
+    assert watch.advance(buffer) == []
+
+
+def test_a_corner_whose_approach_was_never_seen_is_not_reported(two_laps):
+    """Not silence for its own sake: the brake point is looked for up to
+    APPROACH_M before the corner starts, and np.interp holds the first sample
+    flat across everything before it. A brake point read there is that one
+    sample repeated, and it would compare as confidently as a real one.
+    """
+    model, fast, slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+    buffer = LapBuffer(slow.grid)
+
+    joined = int(3000 / 2)
+    for i in range(joined, len(slow.grid)):
+        buffer.add(
+            LiveSample(
+                float(slow.grid[i]), float(slow.time_s[i]), float(slow.speed_kmh[i]),
+                float(slow.throttle[i]), float(slow.brake[i]), float(slow.steering[i]),
+            )
+        )
+    reported = [f.comparison.corner for f in watch.advance(buffer)]
+
+    assert reported, "the corners after 3000 m should still be measured"
+    for corner in reported:
+        assert corner.start_m - APPROACH_M >= 3000.0, corner.name
+    behind = [c for c in model.corners if c.end_m < 3000.0]
+    assert behind, "this track must have corners before the join, or nothing is tested"
+    assert not any(c.index in {r.index for r in reported} for c in behind)
 
 
 def test_one_braking_event_is_not_coached_twice(two_laps):

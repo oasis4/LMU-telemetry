@@ -62,6 +62,73 @@ class SharedMemoryUnavailable(RuntimeError):
     """Raised when the game's mapping cannot be opened or does not fit."""
 
 
+class Odometer:
+    """How far round the lap the car is, at the rate the pedals arrive.
+
+    ``mLapDist`` is a scoring field and scoring moves about five times a
+    second - 18 m apart at 90 m/s, coarser than the 2 m grid everything
+    downstream works on. So the figure is anchored on scoring and carried by
+    speed in between.
+
+    Each scoring update *replaces* the carried figure rather than correcting
+    it. That is what stops the integration error building: no matter how long
+    the reader runs, the error is only ever what accumulated since the last
+    anchor, about 200 ms ago.
+
+    Kept apart from :class:`LiveTelemetry` because this is the part with real
+    behaviour in it, and it should be testable without the game running.
+    """
+
+    def __init__(self) -> None:
+        self._lap: int | None = None
+        self._anchor_m: float | None = None
+        self._carried_m = 0.0
+        self._at: float | None = None
+
+    def forget(self) -> None:
+        """The car went away - to the menus, or to the pits from a replay.
+
+        The lap number is forgotten along with the anchor. Clearing only the
+        anchor leaves the next frame on a lap that matches with nothing behind
+        it, which is a state the arithmetic below has no answer for.
+        """
+        self._lap = None
+        self._anchor_m = None
+        self._carried_m = 0.0
+        self._at = None
+
+    def advance(
+        self, lap_dist: float, lap: int, speed_ms: float, elapsed: float
+    ) -> "float | None":
+        """Where the car is now, or ``None`` if this frame cannot be true."""
+        if lap != self._lap or self._anchor_m is None or self._at is None:
+            return self._anchor(lap_dist, lap, elapsed)
+
+        step = elapsed - self._at
+        if step < 0.0:
+            # The session clock does not run backwards. This frame is torn.
+            return None
+
+        if lap_dist != self._anchor_m:
+            # The allowance scales with the gap, or a stall in the reader
+            # looks like a teleport. The constant term covers the case where
+            # two frames carry the same elapsed time.
+            if abs(lap_dist - self._anchor_m) > MAX_PLAUSIBLE_MS * (step + 0.25):
+                return None
+            return self._anchor(lap_dist, lap, elapsed)
+
+        self._at = elapsed
+        self._carried_m += speed_ms * step
+        return self._anchor_m + self._carried_m
+
+    def _anchor(self, lap_dist: float, lap: int, elapsed: float) -> float:
+        self._lap = lap
+        self._anchor_m = lap_dist
+        self._carried_m = 0.0
+        self._at = elapsed
+        return lap_dist
+
+
 # -- the game's structs, transcribed from Support/SharedMemoryInterface ------
 
 class _Vec3(ctypes.Structure):
@@ -430,10 +497,7 @@ class LiveTelemetry:
             )
         self._mm = probe
         self._size = expected
-        self._anchor_m: float | None = None
-        self._anchor_lap: int | None = None
-        self._carried_m = 0.0
-        self._last_et: float | None = None
+        self._odometer = Odometer()
 
     def _read(self) -> _ObjectOut:
         return _ObjectOut.from_buffer_copy(self._mm[: self._size])
@@ -448,12 +512,13 @@ class LiveTelemetry:
         """
         state = self._read()
         if not state.telemetry.playerHasVehicle:
-            self._anchor_m = None
+            self._odometer.forget()
             return None
 
         car = state.telemetry.telemInfo[state.telemetry.playerVehicleIdx]
         scoring = self._player_scoring(state, car.mID)
         if scoring is None:
+            self._odometer.forget()
             return None
 
         lap = int(car.mLapNumber)
@@ -464,7 +529,9 @@ class LiveTelemetry:
             return None
 
         elapsed = float(car.mElapsedTime)
-        distance = self._advance(float(scoring.mLapDist), lap, speed_ms, elapsed)
+        distance = self._odometer.advance(
+            float(scoring.mLapDist), lap, speed_ms, elapsed
+        )
         if distance is None:
             return None
 
@@ -493,41 +560,6 @@ class LiveTelemetry:
             if entry.mID == car_id:
                 return entry
         return None
-
-    def _advance(
-        self, lap_dist: float, lap: int, speed_ms: float, elapsed: float
-    ) -> "float | None":
-        """Where the car is, anchored on scoring and carried by speed.
-
-        Scoring moves about five times a second. Between its updates the
-        distance is carried forward from speed, and every update replaces the
-        carried figure outright rather than nudging it - which is what stops
-        the integration error accumulating over a lap.
-        """
-        if lap != self._anchor_lap:
-            self._anchor_lap = lap
-            self._anchor_m = lap_dist
-            self._carried_m = 0.0
-            self._last_et = elapsed
-            return lap_dist
-
-        if lap_dist != self._anchor_m:
-            moved = lap_dist - self._anchor_m
-            step = elapsed - (self._last_et or elapsed)
-            # A real car covers at most MAX_PLAUSIBLE_MS metres per second.
-            if step >= 0.0 and moved > MAX_PLAUSIBLE_MS * (step + 0.25):
-                return None
-            self._anchor_m = lap_dist
-            self._carried_m = 0.0
-            self._last_et = elapsed
-            return lap_dist
-
-        step = elapsed - (self._last_et or elapsed)
-        self._last_et = elapsed
-        if step < 0.0:
-            return None
-        self._carried_m += speed_ms * step
-        return self._anchor_m + self._carried_m
 
     def close(self) -> None:
         self._mm.close()

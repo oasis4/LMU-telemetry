@@ -32,7 +32,7 @@ from ..core.coaching import (
     names_braking,
 )
 from ..core.corners import Corner
-from ..core.metrics import CornerMetrics, corner_metrics
+from ..core.metrics import APPROACH_M, CornerMetrics, corner_metrics
 from ..core.trace import LapTrace
 from .buffer import LapBuffer
 
@@ -93,9 +93,30 @@ class CornerWatch:
             corner = self.corners[self._next]
             if reached < corner.end_m:
                 break
-            out.append(self._finish(corner, buffer))
             self._next += 1
+            if self._was_watched(corner, buffer):
+                out.append(self._finish(corner, buffer))
         return out
+
+    @staticmethod
+    def _was_watched(corner: Corner, buffer: LapBuffer) -> bool:
+        """Whether this lap actually saw enough of the corner to measure it.
+
+        A corner needs its approach as much as itself: the brake point is
+        looked for up to ``APPROACH_M`` before the corner starts. Two ways
+        that stretch can be missing - the overlay started while the driver was
+        already on track, or the corner sits so close to the start/finish line
+        that its braking zone belongs to the previous lap.
+
+        Either way ``np.interp`` holds the first sample flat across the gap,
+        and a brake point read there is that one sample repeated. It would
+        compare against the reference as confidently as a real one, so the
+        corner is passed over instead.
+        """
+        started = buffer.started_m
+        if started is None or len(buffer) < 2:
+            return False
+        return corner.start_m - APPROACH_M >= max(started, 0.0)
 
     def _finish(self, corner: Corner, buffer: LapBuffer) -> Finding:
         reference = self._reference_metrics.get(corner.index)

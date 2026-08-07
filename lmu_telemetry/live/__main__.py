@@ -169,6 +169,19 @@ def main(argv: "list[str] | None" = None) -> int:
     drawn_at = 0.0
     on_lap = None
 
+    try:
+        _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap)
+    except KeyboardInterrupt:
+        # Reading the game runs until stopped, and the way it is stopped is
+        # Ctrl-C. A traceback there reads as a fault when it is the exit.
+        print("\nstopped")
+    finally:
+        if overlay is not None:
+            overlay.close()
+    return 0
+
+
+def _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap) -> None:
     for sample, lap in source:
         if lap != on_lap:
             # A new lap. The buffer and the watch both start again; the watch
@@ -204,10 +217,6 @@ def main(argv: "list[str] | None" = None) -> int:
             was = float(np.interp(sample.distance_m, reference.grid, reference.time_s))
             overlay.show_delta(sample.time_s - was)
             overlay.pump()
-
-    if overlay is not None:
-        overlay.close()
-    return 0
 
 
 if __name__ == "__main__":

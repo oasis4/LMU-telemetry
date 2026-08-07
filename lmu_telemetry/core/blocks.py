@@ -144,7 +144,16 @@ def split_into_blocks(traces, corners) -> "list[Block]":
         raise ValueError("no corners to split between")
 
     grid = traces[0].grid
-    lap_length = float(grid[-1]) + GRID_STEP_M
+    for trace in traces[1:]:
+        if len(trace.grid) != len(grid):
+            # The same refusal delta_s makes, for the same reason: two grids
+            # mean two tracks. Unchecked, this indexes one lap's throttle with
+            # another lap's window and surfaces as an IndexError from inside
+            # numpy, several frames from the mistake.
+            raise ValueError(
+                f"laps are not on the same grid: {len(grid)} points and "
+                f"{len(trace.grid)}. Two grids mean two tracks."
+            )
     ordered = sorted(corners, key=lambda c: c.apex_m if c.start_m <= c.end_m else 0.0)
 
     cuts = []
@@ -155,7 +164,12 @@ def split_into_blocks(traces, corners) -> "list[Block]":
             cuts.append(cut)
 
     if not cuts:
-        return [Block(index=1, corners=tuple(ordered), start_m=0.0, end_m=lap_length)]
+        # start == end is "from here the long way round to here". Written as
+        # 0 to lap_length it looks the same and is not: the grid stops one
+        # step short of the length, so _block_time would lose that step and
+        # the ideal lap would come back shorter than the lap it was built
+        # from.
+        return [Block(index=1, corners=tuple(ordered), start_m=0.0, end_m=0.0)]
 
     cuts.sort()
     spans = [(cuts[i], cuts[(i + 1) % len(cuts)]) for i in range(len(cuts))]

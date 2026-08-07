@@ -62,6 +62,20 @@ class LapBuffer:
         """How far round the lap the car has come, or None before it starts."""
         return self._reached
 
+    @property
+    def started_m(self) -> float | None:
+        """Where the first sample landed, or None before there is one.
+
+        Not always zero. The overlay can be started while the driver is
+        already on track, and everything before this point is a stretch of the
+        lap nobody watched - held flat by ``np.interp`` and measurable only in
+        the sense that it produces numbers.
+        """
+        return None if not self._samples else self._samples[0].distance_m
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
     def reset(self) -> None:
         """Start a new lap, called when the game reports the line was crossed."""
         self._samples.clear()
