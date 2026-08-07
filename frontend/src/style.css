@@ -1,143 +1,173 @@
-/* ===== LMU Telemetry Analyzer — Global Styles ===== */
-/* Dark theme, "Linear meets MoTeC" aesthetic */
+/* Design tokens.
+ *
+ * The four colours that carry meaning were validated with the data-viz
+ * validator against this file's own surface (#16181d), not chosen by eye:
+ *
+ *   compared lap  #3987e5   gain #199e70   loss #e66767
+ *   all-pairs: normal-vision ΔE 20.9 worst, contrast >= 3:1, in band.
+ *
+ * The reference lap deliberately has no hue. It is the baseline, so it wears
+ * chrome ink - which also keeps the palette at three hues. Four hues could not
+ * clear the all-pairs floor in any arrangement tried: red against orange came
+ * out at ΔE 7.1, red against yellow 13.0, both under the floor of 15.
+ *
+ * Gain against loss sits at CVD ΔE 6.5 (protan), inside the 6-8 band that is
+ * legal only with a second channel. So the sign is always written next to the
+ * colour, and on the map a lost corner is drawn thicker than a gained one.
+ */
 
 :root {
-  --bg-primary: #0d0d0f;
-  --bg-secondary: #111114;
-  --bg-tertiary: #161619;
-  --border: #1e1e2e;
-  --text-primary: #e0e0e0;
-  --text-secondary: #999;
-  --text-muted: #666;
-  --accent-blue: #3b82f6;
-  --accent-orange: #f97316;
-  --positive: #22c55e;
-  --negative: #ef4444;
-  --neutral: #888;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  /* surfaces */
+  --page: #0e0f12;
+  --surface: #16181d;
+  --surface-raised: #1b1e24;
+  --hover: #21252c;
+  --selected: #263043;
+
+  /* ink */
+  --ink: #e9ecf1;
+  --ink-secondary: #aab3bf;
+  --ink-muted: #7d858f;
+
+  /* chrome */
+  --line: #262a32;
+  --grid: #22262d;
+  --axis: #333a44;
+
+  /* meaning — validated, see above */
+  --reference: #898781;
+  --compared: #3987e5;
+  --gain: #199e70;
+  --loss: #e66767;
+  --level: #4a5058;
+  --accent: #c8ff00;
+
+  --radius: 8px;
+  --pad: 1rem;
+
+  color-scheme: dark;
 }
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html, body {
-  height: 100%;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
-#app {
-  height: 100%;
+h1 {
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-secondary); }
-::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-
-/* Utility */
-.mono { font-family: var(--font-mono); }
-.text-blue { color: var(--accent-blue); }
-.text-orange { color: var(--accent-orange); }
-.text-green { color: var(--positive); }
-.text-red { color: var(--negative); }
-.text-muted { color: var(--text-muted); }
-
-/* Table */
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
-th, td {
-  padding: 8px 14px;
-  text-align: right;
-  border-bottom: 1px solid var(--border);
-}
-th {
-  color: var(--text-secondary);
-  font-weight: 500;
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.5px;
-}
-th:first-child, td:first-child { text-align: left; }
-
-/* Button */
-.btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  padding: 8px 16px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-  font-family: var(--font-sans);
-  border-radius: 4px;
-}
-.btn:hover {
-  border-color: var(--accent-blue);
-  color: var(--accent-blue);
-}
-.btn-active {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
-  color: #fff;
-}
-.btn-primary {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
-  color: #fff;
+h2 {
+  font-size: 0.95rem;
   font-weight: 600;
 }
-.btn-primary:hover {
-  background: #2563eb;
-  border-color: #2563eb;
-  color: #fff;
-}
 
-/* Loading spinner */
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--text-muted);
-  font-size: 15px;
-}
-
-/* Tab bar */
-.tab-bar {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--border);
-}
-.tab-bar button {
-  background: transparent;
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-secondary);
-  padding: 10px 18px;
-  font-size: 12px;
-  font-weight: 500;
   cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  transition: all 0.15s;
 }
-.tab-bar button:hover {
-  color: var(--text-primary);
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
 }
-.tab-bar button.active {
-  color: var(--accent-blue);
-  border-bottom-color: var(--accent-blue);
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--compared);
+  outline-offset: 2px;
+}
+
+/* A card is the only container. Everything sits in one.
+ *
+ * min-width: 0 is load-bearing, not tidiness. A flex or grid item defaults to
+ * min-width: auto and will not shrink below its content - and a uPlot canvas
+ * has a fixed pixel width. Without this the card refuses to narrow, the host
+ * element keeps reporting the old width, the resize handler measures that and
+ * writes it straight back, and the page scrolls sideways for ever. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--pad);
+  min-width: 0;
+}
+
+.card > header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.card > header h2 {
+  color: var(--ink);
+}
+
+.card > header .note {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  margin-left: auto;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+/* uPlot draws light by default. These bring it onto the dark surface;
+ * gridlines and axes are solid hairlines one shade off it, never dashed. */
+.u-legend {
+  color: var(--ink-secondary);
+  font-size: 0.78rem;
+}
+
+.u-legend .u-marker {
+  border-width: 2px !important;
+}
+
+.u-legend th::after {
+  display: none;
+}
+
+.u-select {
+  background: rgba(57, 135, 229, 0.15);
+}
+
+.u-cursor-x,
+.u-cursor-y {
+  border-color: var(--ink-muted) !important;
 }

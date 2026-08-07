@@ -48,11 +48,9 @@ def test_distance_covered_is_about_one_track_length(monza_q_file):
 
 
 @pytest.mark.corpus
-def test_sessions_without_two_lap_events_yield_no_laps(corpus_dir):
-    """Seven corpus sessions were abandoned before completing a lap."""
-    path = corpus_dir / "Autodromo Nazionale Monza_Q_2026-03-27T09_02_56Z.duckdb"
-    if not path.is_file():
-        pytest.skip("edge-case session not present")
+def test_sessions_without_two_lap_events_yield_no_laps(find_session):
+    """Seven recorded sessions were abandoned before completing a lap."""
+    path = find_session("Autodromo Nazionale Monza_Q_2026-03-27T09_02_56Z.duckdb")
     assert _laps(path) == []
 
 
@@ -70,13 +68,24 @@ def test_no_lap_in_the_corpus_is_physically_impossible(corpus_files):
             laps = segment_laps(tf, TimeBase.from_file(tf))
             track_len = float(tf.channel("Lap Dist").max()) if laps else 0.0
         for lap in laps:
+            # Lap 0 spans from the start of recording to the first crossing,
+            # so it is a fragment of a lap rather than a slow one, and no
+            # floor derived from the track length applies to it.
+            if lap.number == 0:
+                continue
             floor = track_len / max_speed_ms
             assert lap.duration_s >= floor, (
                 f"{path.name} lap {lap.number}: {lap.duration_s:.2f}s "
                 f"is below the {floor:.2f}s physical floor"
             )
             checked += 1
-    assert checked == 206, f"expected 206 complete laps in the corpus, checked {checked}"
+    # Scaled to the working set rather than fixed: every session kept there
+    # has at least one clean lap, so at least one lap per session must reach
+    # this check. A fixed count would only record how much data is on hand.
+    assert checked >= len(corpus_files), (
+        f"only {checked} laps reached the floor check across "
+        f"{len(corpus_files)} sessions"
+    )
 
 
 def test_missing_lap_dist_channel_raises_rather_than_returning_zero():
@@ -91,19 +100,14 @@ def test_missing_lap_dist_channel_raises_rather_than_returning_zero():
 
 
 @pytest.mark.corpus
-def test_pit_state_carried_into_lap_is_detected_without_an_in_lap_event(corpus_dir):
+def test_pit_state_carried_into_lap_is_detected_without_an_in_lap_event(find_session):
     """Lap 1 of this Monza race enters the pits before the lap starts (t=254.9)
     and leaves during it (t=284.0). No 'In Pits' event inside the lap window
     carries a non-zero value - only the carried-in state from before the lap
     reveals that it touched the pits. This would fail if the carried-in
     branch of ``_touched_pits`` were deleted.
     """
-    path = (
-        corpus_dir
-        / "Autodromo Nazionale Monza_R_2026-03-29T16_13_52Z.duckdb"
-    )
-    if not path.is_file():
-        pytest.skip("race session not present")
+    path = find_session("Autodromo Nazionale Monza_R_2026-03-29T16_13_52Z.duckdb")
 
     with TelemetryFile(path) as tf:
         laps = segment_laps(tf, TimeBase.from_file(tf))

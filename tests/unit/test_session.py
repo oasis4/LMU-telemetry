@@ -47,6 +47,11 @@ def test_every_corpus_session_reports_plausible_fastest_lap(corpus_files):
             length = s.track_length_m
         if fastest is None:
             continue
+        # Lap 0 is not a lap time - it is however much of a lap the recording
+        # happened to catch. One Sebring session offers 43.3 s of a 5820 m
+        # circuit, so a fastest lap that is lap 0 is the impossible-time
+        # defect itself.
+        assert fastest.number > 0, f"{path.name}: fastest lap is lap 0"
         # No car in any class averages more than 300 km/h over a full lap.
         floor = length / (300.0 / 3.6)
         assert fastest.duration_s > floor, (
@@ -54,4 +59,6 @@ def test_every_corpus_session_reports_plausible_fastest_lap(corpus_files):
             f"implies more than 300 km/h average"
         )
         checked += 1
-    assert checked == 32, f"expected 32 sessions with a fastest lap, checked {checked}"
+    assert checked >= 0.8 * len(corpus_files), (
+        f"only {checked} of {len(corpus_files)} sessions reported a fastest lap"
+    )

@@ -999,6 +999,17 @@ sequences. Validated against an analytic oval."
 
 ### Task 6: Streckenidentität und Referenzlinie
 
+> **Nachtrag nach der Umsetzung:** Der hier beschriebene Entwurf mit
+> `length_bucket_m` (Streckenlänge auf ein 10-m-Raster gerundet) ist **überholt**.
+> Der Golden-Test aus Task 9 hat aufgedeckt, dass ein festes Raster immer Grenzen hat:
+> eine Monza-Session misst 5773,812 m und fällt in Bucket 5770, die übrigen 22 messen
+> 5775–5780 und fallen in 5780 — Monza zerfiel dadurch in zwei Identitäten. Eine
+> größere Bucketgröße verschiebt die Grenze nur. Die Identität ist jetzt
+> `(track, layout)`, und die Längenübereinstimmung wird in `build_track_model`
+> geprüft (`LENGTH_AGREEMENT_TOLERANCE = 0.02`) — der einzigen Stelle, die alle
+> Sessions einer Strecke gleichzeitig sieht.
+
+
 **Files:**
 - Create: `lmu_telemetry/core/track_model.py`
 - Test: `tests/unit/test_track_identity.py`

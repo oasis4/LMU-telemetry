@@ -50,3 +50,17 @@ class TimeBase:
             raise ValueError(f"frequency must be positive, got {frequency_hz}")
         idx = int(round((time_s - self.t0) * frequency_hz))
         return max(idx, 0)
+
+    def channel_window(self, tf, channel_name: str, t_start: float, t_end: float) -> np.ndarray:
+        """The slice of *channel_name* covering the interval [t_start, t_end).
+
+        Channels carry no timestamps, so the interval is mapped onto sample
+        indices via the channel's declared frequency. Both ends are clamped to
+        the array, so a window running past the end of a recording yields a
+        short slice rather than raising or wrapping.
+        """
+        spec = tf.channels.require(channel_name)
+        values = tf.channel(channel_name)
+        i0 = min(self.index_at(t_start, spec.frequency_hz), len(values))
+        i1 = min(self.index_at(t_end, spec.frequency_hz), len(values))
+        return values[i0:i1]

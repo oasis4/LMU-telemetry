@@ -1,431 +1,271 @@
 <script setup>
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import { useTelemetryStore } from '../stores/telemetry.js'
+/**
+ * The circuit, drawn from the line that was measured.
+ *
+ * Not reconstructed from corner radii and headings: that draws what the
+ * detector believed rather than where the car went, and it then agrees with
+ * the corner list however wrong both are.
+ *
+ * Colour carries polarity - lost time against gained - and that pair sits
+ * inside the CVD band where colour alone is not enough. The second channel
+ * here is stroke width: a corner that cost time is drawn thicker. The bars
+ * beside the map carry the signed numbers.
+ *
+ * SVG rather than canvas: the whole path is at most ~1500 points, a corner is
+ * a slice of it, and highlighting one is a class change rather than a redraw.
+ *
+ * Two things can be asked of this map - where the time went, and where the
+ * brakes went on - and it shows one at a time. Both at once would put two
+ * meanings on the same stroke: the corner colouring already spends hue *and*
+ * width on time lost, and braking laid over it would be read as part of that.
+ */
+import { computed, ref } from 'vue'
 
 const props = defineProps({
-  distanceRange: { type: Object, default: null },
-  showRef: { type: Boolean, default: false },
+  map: { type: Object, required: true },
+  losses: { type: Object, default: () => ({}) },
+  /** { reference: [[from_m, to_m], ...], other: [...] }, measured server-side
+   *  on the full trace - see the compare route on why not from the series. */
+  braking: { type: Object, default: null },
+  selected: { type: Number, default: null },
+  size: { type: Number, default: 560 },
 })
+const emit = defineEmits(['select'])
 
-const emit = defineEmits(['corner-click'])
+const PADDING = 22
+const NOISE_S = 0.02
 
-const store = useTelemetryStore()
-const svgRef = ref(null)
-const containerRef = ref(null)
-const width = ref(800)
-const height = ref(300)
+const mode = ref('time')
 
-// When zoomed (distanceRange set), find index range for the visible portion
-function getVisibleRange(telemetry) {
-  if (!telemetry?.distance?.length || !props.distanceRange) return null
-  const { min, max } = props.distanceRange
-  const si = telemetry.distance.findIndex(d => d >= min)
-  const ei = telemetry.distance.findIndex(d => d > max)
+const frame = computed(() => {
+  const { x, y } = props.map
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (let i = 0; i < x.length; i += 1) {
+    if (x[i] < minX) minX = x[i]
+    if (x[i] > maxX) maxX = x[i]
+    if (y[i] < minY) minY = y[i]
+    if (y[i] > maxY) maxY = y[i]
+  }
+  const width = maxX - minX || 1
+  const height = maxY - minY || 1
+  // One scale for both axes: a circuit stretched to fill a box is no longer
+  // the shape of that circuit. Taking the larger extent also keeps it inside
+  // the box when the circuit is taller than it is wide.
+  const scale = (props.size - 2 * PADDING) / Math.max(width, height)
   return {
-    start: Math.max(0, si),
-    end: ei > 0 ? ei : telemetry.distance.length,
+    minX, minY, scale,
+    offsetX: PADDING + (props.size - 2 * PADDING - width * scale) / 2,
+    offsetY: PADDING + (props.size - 2 * PADDING - height * scale) / 2,
   }
+})
+
+function toPoint(index) {
+  const { minX, minY, scale, offsetX, offsetY } = frame.value
+  const px = offsetX + (props.map.x[index] - minX) * scale
+  // SVG's y grows downward; drawn without flipping, every circuit is mirrored.
+  const py = props.size - (offsetY + (props.map.y[index] - minY) * scale)
+  return `${px.toFixed(1)},${py.toFixed(1)}`
 }
 
-// Build projection — auto-rotates track to fill available space optimally
-function buildProjection(w, h, padding = 20) {
-  const t = store.activeTelemetry
-  if (!t?.lat?.length) return null
-
-  // Collect all points to consider (active + ref when shown)
-  const range = getVisibleRange(t)
-  const iStart = range ? range.start : 0
-  const iEnd = range ? range.end : t.lat.length
-
-  let latMin = Infinity, latMax = -Infinity
-  for (let i = iStart; i < iEnd; i++) {
-    if (t.lat[i] < latMin) latMin = t.lat[i]
-    if (t.lat[i] > latMax) latMax = t.lat[i]
-  }
-  if (props.showRef && store.refTelemetry?.lat?.length) {
-    const rr = getVisibleRange(store.refTelemetry)
-    const rs = rr ? rr.start : 0
-    const re = rr ? rr.end : store.refTelemetry.lat.length
-    for (let i = rs; i < re; i++) {
-      if (store.refTelemetry.lat[i] < latMin) latMin = store.refTelemetry.lat[i]
-      if (store.refTelemetry.lat[i] > latMax) latMax = store.refTelemetry.lat[i]
-    }
-  }
-
-  const midLat = (latMin + latMax) / 2
-  const cosLat = Math.cos(midLat * Math.PI / 180)
-
-  // Project all points to flat x/y coordinates
-  const pts = []
-  for (let i = iStart; i < iEnd; i++) {
-    pts.push({ x: t.lon[i] * cosLat, y: t.lat[i] })
-  }
-  if (props.showRef && store.refTelemetry?.lat?.length) {
-    const rr = getVisibleRange(store.refTelemetry)
-    const rs = rr ? rr.start : 0
-    const re = rr ? rr.end : store.refTelemetry.lat.length
-    for (let i = rs; i < re; i++) {
-      pts.push({ x: store.refTelemetry.lon[i] * cosLat, y: store.refTelemetry.lat[i] })
-    }
-  }
-
-  // Compute centroid
-  let cx = 0, cy = 0
-  for (const p of pts) { cx += p.x; cy += p.y }
-  cx /= pts.length; cy /= pts.length
-
-  // Find optimal rotation via PCA (principal axis alignment)
-  let sxx = 0, sxy = 0, syy = 0
-  for (const p of pts) {
-    const dx = p.x - cx, dy = p.y - cy
-    sxx += dx * dx; sxy += dx * dy; syy += dy * dy
-  }
-  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy)
-
-  const drawW = w - 2 * padding
-  const drawH = h - 2 * padding
-
-  // Pick the rotation (theta or theta+90°) that maximizes the scale
-  function fitScale(angle) {
-    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
-    const c = Math.cos(angle), s = Math.sin(angle)
-    for (const p of pts) {
-      const dx = p.x - cx, dy = p.y - cy
-      const rx = dx * c - dy * s, ry = dx * s + dy * c
-      if (rx < xMin) xMin = rx; if (rx > xMax) xMax = rx
-      if (ry < yMin) yMin = ry; if (ry > yMax) yMax = ry
-    }
-    return Math.min(drawW / ((xMax - xMin) || 1e-6), drawH / ((yMax - yMin) || 1e-6))
-  }
-  const bestAngle = fitScale(theta + Math.PI / 2) > fitScale(theta)
-    ? theta + Math.PI / 2 : theta
-
-  // Compute final bounds with best rotation
-  const cosA = Math.cos(bestAngle), sinA = Math.sin(bestAngle)
-  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
-  for (const p of pts) {
-    const dx = p.x - cx, dy = p.y - cy
-    const rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA
-    if (rx < xMin) xMin = rx; if (rx > xMax) xMax = rx
-    if (ry < yMin) yMin = ry; if (ry > yMax) yMax = ry
-  }
-  const bboxW = (xMax - xMin) || 1e-6
-  const bboxH = (yMax - yMin) || 1e-6
-  const scale = Math.min(drawW / bboxW, drawH / bboxH)
-  const projW = bboxW * scale
-  const projH = bboxH * scale
-  const offsetX = padding + (drawW - projW) / 2
-  const offsetY = padding + (drawH - projH) / 2
-
-  return {
-    project(lon, lat) {
-      const px = lon * cosLat
-      const dx = px - cx, dy = lat - cy
-      const rx = dx * cosA - dy * sinA
-      const ry = dx * sinA + dy * cosA
-      const x = offsetX + (rx - xMin) * scale
-      const y = offsetY + (yMax - ry) * scale
-      return { x, y }
-    }
-  }
+function pathFrom(first, last) {
+  const points = []
+  for (let i = first; i < last; i += 1) points.push(toPoint(i))
+  return points.length ? `M${points.join('L')}` : ''
 }
 
-function buildPath(telemetry, proj, range) {
-  if (!telemetry?.lat?.length || !proj) return ''
-  const parts = []
-  const iStart = range ? range.start : 0
-  const iEnd = range ? range.end : telemetry.lat.length
-  for (let i = iStart; i < iEnd; i++) {
-    const { x, y } = proj.project(telemetry.lon[i], telemetry.lat[i])
-    parts.push(`${i === iStart ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`)
-  }
-  return parts.join(' ')
+const outline = computed(() => `${pathFrom(0, props.map.x.length)}Z`)
+
+const cornerPaths = computed(() =>
+  props.map.corners.map((corner) => {
+    const lost = props.losses[corner.index] ?? null
+    const tone =
+      lost === null ? 'neutral' : lost > NOISE_S ? 'loss' : lost < -NOISE_S ? 'gain' : 'level'
+    return {
+      ...corner,
+      lost,
+      tone,
+      d: corner.spans.map(([first, last]) => pathFrom(first, last)).join(' '),
+    }
+  }),
+)
+
+/**
+ * A distance range as a path along the drawn line.
+ *
+ * The line is thinned, so a metre maps onto it by the ratio of the two - and
+ * the range is clamped rather than wrapped: a braking zone that crosses the
+ * start/finish line arrives as two ranges from the server, because the grid
+ * it was measured on ends there.
+ */
+function zonePath(from_m, to_m) {
+  const perPoint = props.map.track_length_m / props.map.x.length
+  const first = Math.max(0, Math.round(from_m / perPoint))
+  const last = Math.min(props.map.x.length - 1, Math.round(to_m / perPoint))
+  // One point is a dot, and `M x,y` alone draws nothing at all - so a zone
+  // shorter than the map's own spacing is widened to the two points that
+  // bracket it rather than silently disappearing.
+  return pathFrom(first, Math.max(last + 1, first + 2))
 }
 
-const isZoomed = computed(() => !!props.distanceRange)
-
-const projection = computed(() => buildProjection(width.value, height.value))
-
-const activeRange = computed(() => getVisibleRange(store.activeTelemetry))
-const refRange = computed(() => getVisibleRange(store.refTelemetry))
-
-const activePath = computed(() => buildPath(store.activeTelemetry, projection.value, isZoomed.value ? activeRange.value : null))
-const refPath = computed(() => {
-  if (!props.showRef) return ''
-  return buildPath(store.refTelemetry, projection.value, isZoomed.value ? refRange.value : null)
+/**
+ * Both laps' zones, reference first.
+ *
+ * The order is the drawing order, and it is load-bearing rather than
+ * incidental: both laps brake for the same corner, so their zones overlap
+ * almost exactly, and the reference has to go down first and wider for the
+ * compared lap to sit inside it as a core. Drawn the other way round the
+ * reference vanished and the map showed one lap while claiming two.
+ */
+const brakingPaths = computed(() => {
+  if (!props.braking) return []
+  return ['reference', 'other'].flatMap((side) =>
+    (props.braking[side] ?? []).map(([from_m, to_m], at) => ({
+      key: `${side}-${at}`,
+      side,
+      d: zonePath(from_m, to_m),
+      title: `${side === 'reference' ? 'reference' : 'compared'} — brakes at `
+        + `${from_m.toFixed(0)} m for ${(to_m - from_m).toFixed(0)} m`,
+      start: toPoint(
+        Math.max(0, Math.round(from_m / (props.map.track_length_m / props.map.x.length))),
+      ).split(','),
+    })),
+  )
 })
 
-// Corner markers with per-corner delta values
-const cornerMarkers = computed(() => {
-  const t = store.activeTelemetry
-  const proj = projection.value
-  if (!t || !t.distance?.length || !t.lat?.length || !proj) return []
-  const d = store.delta
-  return store.corners.map(c => {
-    // When zoomed, only show corners in range
-    if (isZoomed.value && props.distanceRange) {
-      if (c.distance_apex < props.distanceRange.min || c.distance_apex > props.distanceRange.max) return null
-    }
-    const idx = t.distance.findIndex(dd => dd >= c.distance_apex)
-    if (idx < 0) return null
-    const { x, y } = proj.project(t.lon[idx], t.lat[idx])
-    let cornerDelta = null
-    if (d?.distance?.length) {
-      const si = d.distance.findIndex(dd => dd >= c.distance_start)
-      const ei = d.distance.findIndex(dd => dd >= c.distance_end)
-      if (si >= 0 && ei >= 0) cornerDelta = d.delta[ei] - d.delta[si]
-    }
-    const deltaColor = cornerDelta == null ? '#888'
-      : cornerDelta > 0.005 ? '#ef4444'
-      : cornerDelta < -0.005 ? '#22c55e' : '#888'
-    const deltaMs = cornerDelta == null ? ''
-      : cornerDelta > 0 ? `+${cornerDelta.toFixed(3)}s`
-      : `${cornerDelta.toFixed(3)}s`
-    return { ...c, x, y, deltaAtApex: cornerDelta, deltaColor, deltaLabel: deltaMs }
-  }).filter(Boolean)
-})
+function labelPoint(corner) {
+  const [first, last] = corner.spans[0]
+  return toPoint(Math.floor((first + last) / 2)).split(',')
+}
 
-// Delta-colored segments for active path
-const deltaSegments = computed(() => {
-  const t = store.activeTelemetry
-  const d = store.delta
-  const proj = projection.value
-  if (!t || !t.lat?.length || !d || !d.delta?.length || !proj) return []
-
-  const range = isZoomed.value ? activeRange.value : null
-  const iStart = range ? range.start : 0
-  const iEnd = range ? range.end : t.distance.length
-
-  const segments = []
-  const totalPts = iEnd - iStart
-  const step = Math.max(1, Math.floor(totalPts / 300))
-  for (let i = iStart; i < iEnd - step; i += step) {
-    const dist = t.distance[i]
-    const deltaIdx = d.distance.findIndex(dd => dd >= dist)
-    const deltaVal = deltaIdx >= 0 ? d.delta[deltaIdx] : 0
-    let color = '#666'
-    if (deltaVal < -0.01) color = '#22c55e'
-    else if (deltaVal > 0.01) color = '#ef4444'
-    const p1 = proj.project(t.lon[i], t.lat[i])
-    const j = Math.min(i + step, iEnd - 1)
-    const p2 = proj.project(t.lon[j], t.lat[j])
-    segments.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color })
-  }
-  return segments
-})
-
-// Cursor dot on track map
-const cursorDot = computed(() => {
-  const t = store.activeTelemetry
-  const proj = projection.value
-  if (!t || !t.distance?.length || store.cursorDistance == null || !proj) return null
-  const idx = t.distance.findIndex(d => d >= store.cursorDistance)
-  if (idx < 0) return null
-  return proj.project(t.lon[idx], t.lat[idx])
-})
-
-// Legend info
-const hasRef = computed(() => props.showRef && !!store.refTelemetry?.lat?.length)
-const hasDelta = computed(() => !!store.delta?.distance?.length)
-const activeLapLabel = computed(() => store.activeLap ? `Lap ${store.activeLap.lap_number}` : 'Your Lap')
-const refLapLabel = computed(() => store.refLap ? `Lap ${store.refLap.lap_number}` : 'Reference')
-
-// Resize observer
-let observer = null
-onMounted(() => {
-  if (containerRef.value) {
-    const rect = containerRef.value.getBoundingClientRect()
-    width.value = rect.width
-    height.value = rect.height
-    observer = new ResizeObserver(entries => {
-      const r = entries[0].contentRect
-      width.value = r.width
-      height.value = r.height
-    })
-    observer.observe(containerRef.value)
-  }
-})
-onBeforeUnmount(() => {
-  if (observer) observer.disconnect()
-})
-
-function onCornerClick(c) {
-  emit('corner-click', c)
+function title(corner) {
+  if (corner.lost === null) return corner.name
+  const sign = corner.lost >= 0 ? '+' : '−'
+  return `${corner.name} — ${sign}${Math.abs(corner.lost).toFixed(3)} s`
 }
 </script>
 
 <template>
-  <div ref="containerRef" class="track-map">
-    <svg
-      ref="svgRef"
-      :width="width"
-      :height="height"
-      :viewBox="`0 0 ${width} ${height}`"
-    >
-      <!-- Reference path (when showRef) -->
-      <path
-        v-if="refPath"
-        :d="refPath"
-        fill="none"
-        stroke="#f97316"
-        stroke-width="2"
-        opacity="0.7"
-        stroke-dasharray="6 3"
-      />
-
-      <!-- Delta colored segments -->
-      <line
-        v-for="(seg, i) in deltaSegments"
-        :key="'seg-' + i"
-        :x1="seg.x1" :y1="seg.y1"
-        :x2="seg.x2" :y2="seg.y2"
-        :stroke="seg.color"
-        stroke-width="3"
-        stroke-linecap="round"
-      />
-
-      <!-- Active lap path (if no delta data yet) -->
-      <path
-        v-if="activePath && !deltaSegments.length"
-        :d="activePath"
-        fill="none"
-        stroke="#3b82f6"
-        stroke-width="2.5"
-      />
-
-      <!-- Corner markers with delta labels -->
-      <g
-        v-for="m in cornerMarkers"
-        :key="'corner-' + m.id"
-        class="corner-marker"
-        @click="onCornerClick(m)"
-      >
-        <circle
-          :cx="m.x" :cy="m.y" r="13"
-          :fill="store.activeCorner?.id === m.id ? '#f97316' : m.deltaColor || '#e63946'"
-          :stroke="store.activeCorner?.id === m.id ? '#fff' : 'rgba(0,0,0,0.5)'"
-          stroke-width="1.5"
-        />
-        <text
-          :x="m.x" :y="m.y"
-          text-anchor="middle"
-          dominant-baseline="central"
-          fill="#fff"
-          font-size="10"
-          font-family="Inter, sans-serif"
-          font-weight="700"
-        >
-          {{ m.id }}
-        </text>
-        <!-- Delta label -->
-        <text
-          v-if="m.deltaLabel"
-          :x="m.x + 18" :y="m.y - 2"
-          text-anchor="start"
-          dominant-baseline="central"
-          :fill="m.deltaColor"
-          font-size="11"
-          font-family="'JetBrains Mono', monospace"
-          font-weight="600"
-        >
-          {{ m.deltaLabel }}
-        </text>
-      </g>
-
-      <!-- Cursor dot -->
-      <circle
-        v-if="cursorDot"
-        :cx="cursorDot.x" :cy="cursorDot.y"
-        r="5"
-        fill="#fff"
-        stroke="#3b82f6"
-        stroke-width="2"
-      />
-    </svg>
-
-    <!-- Legend -->
-    <div class="map-legend" v-if="hasDelta || hasRef">
-      <div class="legend-item" v-if="hasDelta">
-        <span class="legend-line" style="background: #22c55e;"></span>
-        <span class="legend-text">{{ activeLapLabel }} (schneller)</span>
-      </div>
-      <div class="legend-item" v-if="hasDelta">
-        <span class="legend-line" style="background: #ef4444;"></span>
-        <span class="legend-text">{{ activeLapLabel }} (langsamer)</span>
-      </div>
-      <div class="legend-item" v-if="!hasDelta">
-        <span class="legend-line" style="background: #3b82f6;"></span>
-        <span class="legend-text">{{ activeLapLabel }}</span>
-      </div>
-      <div class="legend-item" v-if="hasRef">
-        <span class="legend-line dashed" style="background: #f97316;"></span>
-        <span class="legend-text">{{ refLapLabel }} (Referenz)</span>
-      </div>
+  <div class="map-block">
+    <div v-if="props.braking" class="modes" role="group" aria-label="what the map shows">
+      <button type="button" :class="{ current: mode === 'time' }"
+              @click="mode = 'time'">time lost</button>
+      <button type="button" :class="{ current: mode === 'braking' }"
+              @click="mode = 'braking'">braking</button>
     </div>
 
-    <div v-if="!activePath" class="no-data">No track data available</div>
+  <svg
+    :viewBox="`0 0 ${props.size} ${props.size}`"
+    class="map"
+    role="img"
+    :aria-label="`${props.map.track} — ${props.map.corners.length} corners`"
+  >
+    <path :d="outline" class="outline" />
+
+    <path
+      v-for="corner in cornerPaths"
+      :key="corner.index"
+      :d="corner.d"
+      class="corner"
+      :class="[mode === 'braking' ? 'quiet' : corner.tone,
+               { selected: corner.index === props.selected }]"
+      @mouseenter="emit('select', corner)"
+      @click="emit('select', corner)"
+    >
+      <title>{{ title(corner) }}</title>
+    </path>
+
+    <template v-if="mode === 'braking'">
+      <!-- In the order brakingPaths hands them over, which is where the
+           reference-before-compared guarantee lives. -->
+      <path v-for="zone in brakingPaths" :key="zone.key" :d="zone.d"
+            class="braking" :class="zone.side">
+        <title>{{ zone.title }}</title>
+      </path>
+      <circle v-for="zone in brakingPaths" :key="`dot-${zone.key}`"
+              :cx="zone.start[0]" :cy="zone.start[1]" r="3.5"
+              class="brake-start" :class="zone.side">
+        <title>{{ zone.title }}</title>
+      </circle>
+    </template>
+
+    <g class="labels">
+      <text
+        v-for="corner in cornerPaths"
+        :key="`label-${corner.index}`"
+        :x="labelPoint(corner)[0]"
+        :y="labelPoint(corner)[1]"
+        :class="{ selected: corner.index === props.selected }"
+      >{{ corner.index }}</text>
+    </g>
+
+    <circle
+      :cx="toPoint(0).split(',')[0]"
+      :cy="toPoint(0).split(',')[1]"
+      r="4.5"
+      class="start"
+    />
+    <title>start / finish</title>
+  </svg>
   </div>
 </template>
 
 <style scoped>
-.track-map {
-  width: 100%;
-  height: 100%;
-  background: var(--bg-secondary);
-  position: relative;
+.map { width: 100%; height: auto; display: block; }
+
+.outline {
+  fill: none;
+  stroke: var(--axis);
+  stroke-width: 6;
+  stroke-linejoin: round;
 }
-.track-map svg {
-  display: block;
-}
-.corner-marker {
+
+.corner {
+  fill: none;
+  stroke-linecap: round;
   cursor: pointer;
+  transition: stroke-width 0.12s ease;
 }
-.corner-marker:hover circle {
-  fill: #3b82f6;
+/* Stroke width is the second channel beside hue: a corner that cost time is
+ * drawn heavier, so the polarity survives colour-vision deficiency. */
+.corner.neutral { stroke: var(--level); stroke-width: 6; }
+.corner.level { stroke: var(--level); stroke-width: 6; }
+.corner.gain { stroke: var(--gain); stroke-width: 6; }
+.corner.loss { stroke: var(--loss); stroke-width: 10; }
+.corner.selected { stroke-width: 13; }
+/* In braking mode the corners stay clickable but say nothing about time -
+ * the map is answering one question at a time. */
+.corner.quiet { stroke: var(--level); stroke-width: 6; opacity: 0.5; }
+
+/* Braking is weight on the circuit's own line. The reference is wider and
+ * underneath so the two are still telling apart where both brake together. */
+.braking { fill: none; stroke-linecap: butt; pointer-events: none; }
+.braking.reference { stroke: var(--reference); stroke-width: 14; }
+.braking.other { stroke: var(--compared); stroke-width: 7; }
+.brake-start { pointer-events: none; }
+.brake-start.reference { fill: var(--reference); }
+.brake-start.other { fill: var(--compared); }
+
+.map-block { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.modes { display: flex; gap: 0.3rem; }
+.modes button {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 0.76rem;
+  color: var(--ink-secondary);
 }
-.no-data {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 14px;
-}
-.map-legend {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  background: rgba(15, 15, 20, 0.85);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 10px;
+.modes button:hover { background: var(--hover); }
+.modes button.current { background: var(--selected); color: var(--ink); border-color: var(--compared); }
+
+.labels text {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--ink-secondary);
+  text-anchor: middle;
+  dominant-baseline: middle;
   pointer-events: none;
 }
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.legend-line {
-  width: 16px;
-  height: 3px;
-  border-radius: 1px;
-  flex-shrink: 0;
-}
-.legend-line.dashed {
-  background: repeating-linear-gradient(
-    90deg,
-    #f97316 0px, #f97316 4px,
-    transparent 4px, transparent 7px
-  ) !important;
-}
-.legend-text {
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
+.labels text.selected { fill: var(--accent); }
+
+.start { fill: var(--accent); }
 </style>

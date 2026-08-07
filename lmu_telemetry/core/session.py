@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from ..io.channels import MissingChannelError
 from ..io.duckdb_source import TelemetryFile
 from .laps import Lap, segment_laps
@@ -101,7 +103,43 @@ class Session:
 
     @property
     def fastest_lap(self) -> Lap | None:
-        candidates = [l for l in self.laps if not l.touched_pits]
+        """The quickest lap that is a lap time at all.
+
+        Lap 0 is excluded, not merely deprioritised. It runs from the moment
+        recording started to the first timed crossing, so it is however much
+        of a lap the recording happened to catch - on one Sebring session,
+        43.3 s of a 5820 m circuit, an average of 483 km/h. Ranking it against
+        real laps by duration puts it first. Filtering only on
+        ``touched_pits`` misses it whenever the car did not pass through the
+        pits, which is exactly the case that produces an impossible time.
+        """
+        candidates = [l for l in self.laps if l.number > 0 and not l.touched_pits]
         if not candidates:
             return None
         return min(candidates, key=lambda l: l.duration_s)
+
+    def lap_channel_from_crossing(
+        self, lap: Lap, name: str, lookback_s: float
+    ) -> "tuple[np.ndarray, float]":
+        """*name* over the lap, opened *lookback_s* early, with that offset.
+
+        Returns ``(values, offset_s)`` where *offset_s* is how far before the
+        lap's own start the first sample sits - so every channel read this way
+        shares one clock origin, and callers can put the lap's zero back.
+
+        Position is read this way because a ``Lap`` event can fire well after
+        the car crossed the line: in about 30 % of the working set's clean laps
+        the lap's own window begins 100-115 m in. Those metres exist, at the
+        end of the previous lap's window; reading them is the difference
+        between measuring the track and interpolating across it.
+        """
+        start = max(lap.t_start - lookback_s, self._timebase.t0)
+        values = self._timebase.channel_window(self._file, name, start, lap.t_end)
+        return values, float(lap.t_start - start)
+
+    def lap_channel(self, lap: Lap, name: str) -> np.ndarray:
+        """The slice of *name* covering *lap*, in canonical units.
+
+        Delegates to :meth:`TimeBase.channel_window` for the index mapping.
+        """
+        return self._timebase.channel_window(self._file, name, lap.t_start, lap.t_end)

@@ -1,9 +1,15 @@
-"""Extract small, real test fixtures from the local telemetry corpus.
+"""Extract small, real test fixtures from the local telemetry recordings.
 
-The corpus itself is gitignored (637 MB).  These fixtures are committed so the
-test suite has real data to run against in CI.  They keep only the tables the
-tests read, blank the 38 kB CarSetup JSON, and use a 16 kB DuckDB block size -
-which takes the Monza reference session from 8.6 MB down to 860 kB.
+The recordings themselves are gitignored (4.1 GB).  These fixtures are
+committed so the test suite has real data to run against in CI.  They keep
+only the tables the tests read, blank the 38 kB CarSetup JSON, and use a 16 kB
+DuckDB block size - which takes the Monza reference session from 8.6 MB down
+to 860 kB.
+
+Sources are looked for in the working set and then in the archive, because a
+fixture is chosen for the edge case it carries and that is often the same
+reason curation archived it: three of the seven below are sessions with no
+usable lap at all.
 
 Run from the repository root:
 
@@ -18,7 +24,7 @@ from pathlib import Path
 import duckdb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CORPUS = REPO_ROOT / "LMU Data-20260803T093100Z-1-001" / "LMU Data"
+SOURCE_DIRS = [REPO_ROOT / "data" / "sessions", REPO_ROOT / "data" / "archive"]
 OUT_DIR = REPO_ROOT / "tests" / "fixtures"
 
 BLOCK_SIZE = 16384
@@ -56,6 +62,44 @@ FIXTURES: list[tuple[str, str, float | None, str]] = [
         "monza_r_extra_dist_reset.duckdb",
         700.0,
         "12 Lap events but 13 Lap Dist resets - the case that broke the old code",
+    ),
+    (
+        "Autodromo Enzo e Dino Ferrari_R_2026-04-04T18_46_34Z.duckdb",
+        "imola_r_fused_formation_lap.duckdb",
+        500.0,
+        "lap 0 covers 1.93 track lengths: the formation lap fused with the "
+        "first racing lap",
+    ),
+    (
+        "Autodromo Nazionale Monza_R_2026-04-04T19_41_31Z.duckdb",
+        "monza_r_position_jump.duckdb",
+        540.0,
+        "lap 1 winds exactly once and covers 1.002 track lengths, but its "
+        "position jumps 41 m between samples 2 m apart; lap 2 is clean, so "
+        "the fixture is not a broken recording throughout",
+    ),
+    (
+        "Paul Ricard Circuit_P_2026-07-03T19_11_28Z.duckdb",
+        "paul_ricard_p_zero_winding.duckdb",
+        420.0,
+        "lap 2 covers 1.011 track lengths yet winds 0.00 times round the "
+        "circuit: a 74 m position jump cancels its turning",
+    ),
+    (
+        "Autodromo Nazionale Monza_P_2026-04-19T16_07_46Z.duckdb",
+        "monza_p_fastest_lap_untimed.duckdb",
+        490.0,
+        "lap 3 is the quickest at 102.10 s but the game recorded no lap time "
+        "for it, so the quickest lap and the quickest *usable* lap are "
+        "different laps",
+    ),
+    (
+        "Bahrain International Circuit_Q_2026-04-18T18_52_55Z.duckdb",
+        "bahrain_q_backward_lap_dist.duckdb",
+        410.0,
+        "lap 2 steps backwards in Lap Dist 33 times, once by 5.2 m - further "
+        "than a grid step, so it is the lap that tells a running maximum "
+        "apart from sorting by distance",
     ),
 ]
 
@@ -116,13 +160,21 @@ def build(source: Path, dest: Path, keep_seconds: float | None) -> None:
         con.close()
 
 
+def _find(name: str) -> Path | None:
+    for directory in SOURCE_DIRS:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def main() -> None:
-    if not CORPUS.is_dir():
-        raise SystemExit(f"corpus not found at {CORPUS}")
+    if not any(d.is_dir() for d in SOURCE_DIRS):
+        raise SystemExit(f"no recordings found under {[str(d) for d in SOURCE_DIRS]}")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for src_name, dest_name, keep, why in FIXTURES:
-        source = CORPUS / src_name
-        if not source.is_file():
+        source = _find(src_name)
+        if source is None:
             print(f"SKIP {dest_name}: source missing ({src_name})")
             continue
         dest = OUT_DIR / dest_name
