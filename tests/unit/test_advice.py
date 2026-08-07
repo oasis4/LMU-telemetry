@@ -52,6 +52,16 @@ def _brake_from(distance_m):
     return brake
 
 
+def _trail_brake(start_m, peak_m, release_m):
+    """Pressure up at *start_m*, highest at *peak_m*, bled off by *release_m*."""
+    brake = np.zeros(len(grid_for(LAP_M)))
+    brake[_index(start_m) : _index(peak_m)] = 0.6
+    brake[_index(peak_m)] = 1.0
+    taper = np.linspace(1.0, 0.0, _index(release_m) - _index(peak_m) + 2)[1:-1]
+    brake[_index(peak_m) + 1 : _index(release_m) + 1] = taper
+    return brake
+
+
 def _throttle_from(distance_m):
     throttle = np.zeros(len(grid_for(LAP_M)))
     throttle[_index(distance_m) :] = 1.0
@@ -67,6 +77,45 @@ def _slow_through(minimum_kmh, exit_kmh=200.0, pace=200.0):
 
 def _advice_for(reference, other):
     return advice(compare_corners(reference, other, [CORNER]))
+
+
+def test_a_different_brake_shape_alone_says_nothing():
+    """Two valid styles, not a fault.
+
+    One driver stops the car and turns it; the other carries the brake to the
+    apex. The corner cost nothing and the outcome matched, so there is no
+    result to attach the shape to - and telemetry cannot tell a style from a
+    mistake without one.
+    """
+    speed = _slow_through(100.0)
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 860.0), speed_kmh=speed)
+    other = _trace(brake=_trail_brake(800.0, 820.0, 960.0), speed_kmh=speed)
+    assert _advice_for(reference, other) == []
+
+
+def test_a_brake_shape_difference_with_a_matched_outcome_stays_quiet():
+    """The corner cost time and the shape really did differ - and still nothing.
+
+    Neither the minimum nor the exit is measurably worse, so nothing ties the
+    loss to the shape. Naming it here would be a guess wearing a number, which
+    is the failure this whole feature is built to avoid.
+    """
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 860.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 820.0, 960.0), speed_kmh=_slow_through(98.0))
+
+    comparison = compare_corners(reference, other, [CORNER])[0]
+    assert comparison.lost_s > ADVICE_MIN_LOSS_S, "the corner must actually cost time"
+    assert "trail length" in [d.what for d in comparison.differences], (
+        "the shape difference must be visible, or this tests nothing"
+    )
+    assert abs(comparison.other.min_speed_kmh - comparison.reference.min_speed_kmh) < (
+        ADVICE_SPEED_KMH
+    ), "the outcome must be matched, or this tests the wrong rule"
+
+    found = advice([comparison])
+    assert all(
+        "trail" not in a.because and "brake peak" not in a.because for a in found
+    ), [a.headline for a in found]
 
 
 def test_braking_later_alone_says_nothing():
