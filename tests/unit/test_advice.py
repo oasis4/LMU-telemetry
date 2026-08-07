@@ -191,6 +191,32 @@ def test_braking_later_and_slower_through_the_middle_is_a_story():
     assert "braking earlier" in found[0].headline.lower()
 
 
+def test_braking_early_with_a_short_trail_is_told_to_stay_on_the_brake():
+    """Braked earlier, off the pedal sooner, and slower through the middle.
+
+    The car was slowed in a straight line and then rolled through with no
+    brake left to turn it. The coarse rule can only say "brake later"; the
+    trail is what makes the second half of the sentence true.
+    """
+    reference = _trace(brake=_trail_brake(840.0, 860.0, 940.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(790.0, 810.0, 850.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "longer" in found[0].headline.lower()
+    assert "trail length" in found[0].because
+    assert "brake point" in found[0].because
+
+
+def test_braking_early_without_a_trail_difference_still_gets_the_coarse_rule():
+    """The finer rule refines rule 2; it must not swallow it."""
+    reference = _trace(brake=_brake_from(840.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_brake_from(790.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "brake later" in found[0].headline.lower()
+    assert "trail length" not in found[0].because
+
+
 def test_braking_earlier_and_still_slower_is_the_other_story():
     reference = _trace(brake=_brake_from(840.0), speed_kmh=_slow_through(100.0))
     other = _trace(brake=_brake_from(790.0), speed_kmh=_slow_through(80.0))

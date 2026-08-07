@@ -153,6 +153,13 @@ ADVICE_POINT_M = 15.0
 #: And how much slower counts, in km/h.
 ADVICE_SPEED_KMH = 3.0
 
+#: How much longer or shorter a trail phase has to be to count. A trail length
+#: is the gap between two positions on one trace, so its error is about twice
+#: ADVICE_POINT_M's - and a typical trail runs 20-60 m, which makes this
+#: deliberately demanding. Silence is the right answer here more often than
+#: not: a release point is as often a style as a mistake.
+ADVICE_TRAIL_M = 15.0
+
 
 @dataclass(frozen=True)
 class Advice:
@@ -195,6 +202,11 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
         if reference.throttle_point_m is None or other.throttle_point_m is None
         else other.throttle_point_m - reference.throttle_point_m
     )
+    trail = (
+        None
+        if reference.trail_length_m is None or other.trail_length_m is None
+        else other.trail_length_m - reference.trail_length_m
+    )
 
     def amounts(*parts: str) -> str:
         return ", ".join(parts)
@@ -212,6 +224,34 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
             "entry speed did not survive the corner.",
             amounts(
                 f"brake point {brake:+.0f} m",
+                f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
+    # Braked earlier, off the pedal sooner, and slower through the middle: the
+    # car was stopped in a straight line and then rolled through the corner
+    # with nothing left on the brake to turn it. This is the rule below with
+    # its reason attached, so it is tried first and that rule catches whatever
+    # it leaves - a brake-point difference with no trail difference behind it
+    # is still worth saying, just not with the second half of this sentence.
+    if (
+        brake is not None
+        and brake < -ADVICE_POINT_M
+        and trail is not None
+        and trail < -ADVICE_TRAIL_M
+        and minimum < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "Brake a touch later and stay on it longer",
+            "You went to the brake earlier and came off it sooner, so the car "
+            "was slowed in a straight line and had nothing left on the brake "
+            "to turn with.",
+            amounts(
+                f"brake point {brake:+.0f} m",
+                f"trail length {trail:+.0f} m",
                 f"minimum speed {minimum:+.1f} km/h",
                 f"cost {comparison.lost_s:.3f} s",
             ),
