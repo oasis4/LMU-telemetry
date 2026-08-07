@@ -31,6 +31,14 @@ from .coaching import (
     compare_corners,
     corner_comparison,
 )
+from .blocks import (
+    Block,
+    BlockChoice,
+    IdealLap,
+    Seam,
+    ideal_lap,
+    split_into_blocks,
+)
 from .corners import Corner, detect_corners
 from .delta import delta_s, time_lost_over
 from .laps import Lap, NoLapDataError, segment_laps
@@ -49,15 +57,19 @@ from .trace import LapTrace, TraceError, build_trace
 
 __all__ = [
     "Advice",
+    "Block",
+    "BlockChoice",
     "Corner",
     "CornerComparison",
     "CornerMetrics",
     "CornerName",
     "Difference",
+    "IdealLap",
     "Lap",
     "LapQuality",
     "LapTrace",
     "NoLapDataError",
+    "Seam",
     "Session",
     "SessionInfo",
     "TraceError",
@@ -76,10 +88,12 @@ __all__ = [
     "corner_metrics",
     "delta_s",
     "detect_corners",
+    "ideal_lap",
     "lap_metrics",
     "load_model",
     "load_names",
     "save_model",
     "segment_laps",
+    "split_into_blocks",
     "time_lost_over",
 ]
