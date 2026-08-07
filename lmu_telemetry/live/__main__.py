@@ -78,6 +78,47 @@ def _from_replay(trace, speed: float, lap_number: int):
         yield sample, lap_number
 
 
+def _await_reference(live, recordings: Path, patience_s: float = 120.0):
+    """Wait for the game to load a circuit, then find a lap driven on it.
+
+    This is what lets the overlay be started once, before the session, rather
+    than being handed a filename every time. The track name comes from
+    scoring, which answers while the driver is still in the garage - which is
+    the moment there is time to go and read a few hundred recordings.
+    """
+    from .reference import find_reference
+
+    print(f"waiting for a circuit to load (looking in {recordings})")
+    deadline = time.perf_counter() + patience_s
+    track = ""
+    while not track:
+        if time.perf_counter() > deadline:
+            print("no circuit loaded - is the game in a session?", file=sys.stderr)
+            return None
+        track = live.track_name()
+        if not track:
+            time.sleep(1.0)
+
+    print(f"circuit:   {track}")
+    if not recordings.is_dir():
+        print(
+            f"no recordings directory at {recordings}. Point --recordings at "
+            f"one, or name a lap with --reference.",
+            file=sys.stderr,
+        )
+        return None
+
+    found = find_reference(recordings, track)
+    if found is None:
+        print(
+            f"nothing recorded at {track} yet, so there is nothing to measure "
+            f"against. Drive a lap with the game's own telemetry logging on, "
+            f"or name a lap from elsewhere with --reference.",
+            file=sys.stderr,
+        )
+    return found
+
+
 def _probe(seconds: float = 20.0) -> int:
     """Print what the game is reporting, so the transcription can be checked.
 
@@ -133,16 +174,37 @@ def main(argv: "list[str] | None" = None) -> int:
                              "is the only corner-free choice on a wide screen)")
     parser.add_argument("--scale", type=float, default=1.0,
                         help="size multiplier on top of the screen-derived one")
+    parser.add_argument("--recordings", type=Path, default=Path("data") / "sessions",
+                        help="where to look for a reference lap when --reference "
+                             "is not given (default: data/sessions)")
     args = parser.parse_args(argv)
 
     if args.probe:
         return _probe()
-    if args.reference is None:
-        parser.error("--reference is required unless --probe is given")
 
-    reference, model, reference_lap = _trace_of(args.reference, args.reference_lap)
+    live = None
+    if args.replay is None:
+        from .sharedmem import LiveTelemetry, SharedMemoryUnavailable
+
+        try:
+            live = LiveTelemetry()
+        except SharedMemoryUnavailable as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+
+    if args.reference is not None:
+        chosen, chosen_lap = args.reference, args.reference_lap
+    else:
+        if live is None:
+            parser.error("--reference is required when replaying a recording")
+        found = _await_reference(live, args.recordings)
+        if found is None:
+            return 1
+        chosen, chosen_lap = found.path, found.lap_number
+
+    reference, model, reference_lap = _trace_of(chosen, chosen_lap)
     print(
-        f"reference: {args.reference.name} lap {reference_lap.number} "
+        f"reference: {chosen.name} lap {reference_lap.number} "
         f"({reference_lap.duration_s:.3f} s)\n"
         f"{model.track_length_m / 1000:.3f} km, {len(model.corners)} corners"
     )
@@ -155,13 +217,7 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         source = _from_replay(driven, args.speed, driven_lap.number)
     else:
-        from .sharedmem import LiveTelemetry, SharedMemoryUnavailable
-
-        try:
-            source = _from_game(LiveTelemetry())
-        except SharedMemoryUnavailable as exc:
-            print(f"{exc}", file=sys.stderr)
-            return 1
+        source = _from_game(live)
         print("driving:   the running game")
 
     overlay = None

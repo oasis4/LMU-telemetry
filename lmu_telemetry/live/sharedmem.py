@@ -502,6 +502,17 @@ class LiveTelemetry:
     def _read(self) -> _ObjectOut:
         return _ObjectOut.from_buffer_copy(self._mm[: self._size])
 
+    def track_name(self) -> str:
+        """The circuit the game has loaded, or "" when it has none.
+
+        Read from scoring rather than from the player's telemetry entry, so it
+        is answerable while the driver is still in the garage and no car is
+        reporting - which is exactly when the overlay wants to know, because
+        that is when it has time to go and find a reference lap.
+        """
+        raw = self._read().scoring.scoringInfo.mTrackName
+        return raw.decode("utf-8", "replace").strip() if raw else ""
+
     def sample(self) -> "tuple[LiveSample, int] | None":
         """One instant of the player's car and its lap number, or None.
 

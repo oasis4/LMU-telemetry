@@ -128,10 +128,15 @@ class Overlay:
         # A coloured rail down the left edge. In peripheral vision this reads
         # before any of the text does - gaining or losing is the one thing
         # worth knowing without looking directly at the panel.
+        # fill/expand, not a bare pack(). The window's width is set explicitly
+        # below, and pack() centres its child inside whatever it is given - so
+        # the card sat in the middle of the window with the punched-out
+        # background, and therefore the desktop, showing down both sides.
         shell = tk.Frame(self.root, bg=CARD)
-        shell.pack()
+        shell.pack(fill="both", expand=True)
         self.rail = tk.Frame(shell, bg=NEUTRAL, width=max(4, int(6 * k)))
         self.rail.pack(side="left", fill="y")
+        self.rail.pack_propagate(False)
 
         card = tk.Frame(shell, bg=CARD, padx=pad, pady=max(6, int(10 * k)))
         card.pack(side="left", fill="both", expand=True)
