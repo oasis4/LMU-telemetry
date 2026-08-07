@@ -296,6 +296,29 @@ def test_every_piece_of_advice_carries_the_numbers_it_rests_on():
     assert "s" in found.because
 
 
+def test_a_late_peak_from_the_same_brake_point_is_told_to_build_pressure():
+    """Pedal down in the right place, full pressure late, slower through the middle.
+
+    A single brake point cannot see this at all: both laps braked at 800 m.
+    What differs is how fast the pressure arrived after that.
+    """
+    reference = _trace(brake=_trail_brake(800.0, 812.0, 900.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 860.0, 900.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "pressure" in found[0].headline.lower()
+    assert "brake peak" in found[0].because
+
+
+def test_a_matched_peak_still_gets_the_corner_speed_rule():
+    """The finer rule refines rule 4; it must not swallow it."""
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 900.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 822.0, 900.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "corner speed" in found[0].headline.lower()
+
+
 def test_a_corner_that_cost_nothing_gets_no_advice():
     """Below the threshold the differences are lap-to-lap variation, and a
     confident sentence about them is noise given a voice."""

@@ -207,6 +207,11 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
         if reference.trail_length_m is None or other.trail_length_m is None
         else other.trail_length_m - reference.trail_length_m
     )
+    peak = (
+        None
+        if reference.brake_peak_m is None or other.brake_peak_m is None
+        else other.brake_peak_m - reference.brake_peak_m
+    )
 
     def amounts(*parts: str) -> str:
         return ", ".join(parts)
@@ -327,6 +332,32 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
             "You matched the reference through the corner but picked the "
             "throttle up later, and the time went on the way out.",
             amounts(*parts),
+            comparison.lost_s,
+        )
+
+    # The pedal went down in the right place, but the pressure arrived late -
+    # so the stop happened deeper than it should have and the middle of the
+    # corner paid for it. A single brake point cannot see this at all: both
+    # laps braked in the same metre. This is the rule below with a cause, so
+    # it is tried first and that rule catches what it leaves.
+    if (
+        brake is not None
+        and abs(brake) <= ADVICE_POINT_M
+        and peak is not None
+        and peak > ADVICE_POINT_M
+        and minimum < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "Get to full brake pressure sooner",
+            "You went to the brake in the same place but took longer to reach "
+            "peak pressure, so the car was still slowing where it should have "
+            "been turning.",
+            amounts(
+                f"brake peak {peak:+.0f} m",
+                f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
             comparison.lost_s,
         )
 
