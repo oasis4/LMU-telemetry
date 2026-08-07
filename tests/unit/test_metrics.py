@@ -178,6 +178,94 @@ def test_metrics_over_a_real_lap_are_physically_ordered(corpus_dir):
     assert braked >= 5, f"only {braked} corners of Monza showed any braking"
 
 
+# -- the shape of one braking event ----------------------------------------
+
+def _trail_brake(start_m, peak_m, release_m):
+    """Pressure up at *start_m*, highest at *peak_m*, bled off by *release_m*.
+
+    The taper is linear from the peak down through TRAIL_OFF, which is what a
+    trail-braking release looks like and what a lone threshold crossing cannot
+    describe.
+    """
+    brake = np.zeros(len(grid_for(LAP_M)))
+    brake[_index(start_m) : _index(peak_m)] = 0.6
+    brake[_index(peak_m)] = 1.0
+    taper = np.linspace(1.0, 0.0, _index(release_m) - _index(peak_m) + 2)[1:-1]
+    brake[_index(peak_m) + 1 : _index(release_m) + 1] = taper
+    return brake
+
+
+def test_the_four_markers_come_off_one_braking_event():
+    m = corner_metrics(
+        _trace(brake=_trail_brake(800.0, 840.0, 940.0)), _corner(900.0, 950.0, 1000.0)
+    )
+    assert m.brake_point_m == pytest.approx(800.0, abs=GRID_STEP_M)
+    assert m.brake_peak_m == pytest.approx(840.0, abs=GRID_STEP_M)
+    assert m.brake_release_m == pytest.approx(940.0, abs=2 * GRID_STEP_M)
+    assert m.trail_length_m == pytest.approx(100.0, abs=2 * GRID_STEP_M)
+
+
+def test_the_release_is_read_past_the_slowest_point():
+    """A trail carries past the minimum speed.
+
+    The brake point is found in a window that ends at the slowest sample. Used
+    for the release too, that window would report every trail as ending
+    exactly at the slowest point - a number produced by the window rather than
+    by the driving, and one that would compare as confidently as a real one.
+    """
+    speed = np.full(len(grid_for(LAP_M)), 200.0)
+    speed[_index(900.0) : _index(1000.0)] = 100.0
+    m = corner_metrics(
+        _trace(speed_kmh=speed, brake=_trail_brake(800.0, 830.0, 980.0)),
+        _corner(900.0, 950.0, 1000.0),
+    )
+    assert m.min_speed_at_m == pytest.approx(900.0, abs=GRID_STEP_M)
+    assert m.brake_release_m > m.min_speed_at_m
+
+
+def test_a_lap_that_never_braked_has_none_of_the_markers():
+    m = corner_metrics(_trace(), _corner(900.0, 950.0, 1000.0))
+    assert m.brake_point_m is None
+    assert m.brake_peak_m is None
+    assert m.brake_release_m is None
+    assert m.trail_length_m is None
+
+
+def test_the_release_threshold_is_below_the_one_that_starts_braking():
+    """Or the tapering end of every trail is clipped by it."""
+    from lmu_telemetry.core.metrics import TRAIL_OFF
+
+    assert 0.0 < TRAIL_OFF < BRAKE_ON
+
+
+def test_a_stab_of_the_brakes_has_almost_no_trail():
+    """Straight-line braking released in one go. The marker has to be able to
+    say "there was no trail here", or a short trail and a long one compare the
+    same."""
+    brake = np.zeros(len(grid_for(LAP_M)))
+    brake[_index(800.0) : _index(840.0)] = 0.9
+    m = corner_metrics(_trace(brake=brake), _corner(900.0, 950.0, 1000.0))
+    assert m.trail_length_m == pytest.approx(38.0, abs=4 * GRID_STEP_M)
+
+
+def test_the_trail_of_a_corner_across_the_start_finish_line_is_not_a_lap_long():
+    """The peak and the release sit at opposite ends of the array there.
+
+    Subtracting the two distances returns the whole rest of the lap with a
+    minus sign, so the length is counted in grid steps instead.
+    """
+    brake = np.zeros(len(grid_for(LAP_M)))
+    brake[_index(1840.0) :] = 0.6
+    brake[_index(1900.0)] = 1.0
+    taper = np.linspace(1.0, 0.0, _index(60.0) + (len(brake) - _index(1900.0)) + 1)[1:]
+    brake[_index(1900.0) + 1 :] = taper[: len(brake) - _index(1900.0) - 1]
+    brake[: _index(60.0)] = taper[len(brake) - _index(1900.0) - 1 :][: _index(60.0)]
+
+    m = corner_metrics(_trace(brake=brake), _corner(1900.0, 1980.0, 100.0))
+    assert m.trail_length_m is not None
+    assert 0.0 <= m.trail_length_m < 200.0, m.trail_length_m
+
+
 # -- braking zones ---------------------------------------------------------
 
 def test_braking_zones_are_the_stretches_the_pedal_was_down(monza_q_file):

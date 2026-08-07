@@ -25,6 +25,11 @@ from .trace import LapTrace
 
 #: Brake pressure above which the driver is braking, normalised (5 %).
 BRAKE_ON = 0.05
+#: Brake pressure below which the pedal is off again, normalised (2 %). Lower
+#: than BRAKE_ON on purpose: a trail tapers to nothing, and a release read at
+#: the threshold that *starts* a braking event cuts the last stretch of it
+#: off - which is exactly the stretch a trail-braking difference lives in.
+TRAIL_OFF = 0.02
 #: Throttle above which the driver is back on the power, normalised (50 %).
 THROTTLE_ON = 0.50
 #: How far before a corner to look for its braking, in metres. Long enough for
@@ -38,6 +43,14 @@ class CornerMetrics:
 
     corner: Corner
     brake_point_m: float | None
+    #: Where pressure was highest in that same braking event, and where the
+    #: pedal came off it. Between them is the trail phase, whose *length* is
+    #: the number worth comparing: two drivers can release in different places
+    #: and both be right, but how far they bled the brake off over is what
+    #: turns up in the corner's outcome.
+    brake_peak_m: float | None
+    brake_release_m: float | None
+    trail_length_m: float | None
     entry_speed_kmh: float
     min_speed_kmh: float
     min_speed_at_m: float
@@ -89,14 +102,26 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return runs
 
 
-def _brake_point(trace: LapTrace, corner: Corner, slowest: int) -> float | None:
-    """Where the braking that produced this corner's minimum speed began.
+def _brake_shape(
+    trace: LapTrace, corner: Corner, slowest: int
+) -> "tuple[float, float, float, float] | None":
+    """Start, peak, release and trail length of this corner's braking, in metres.
 
-    The approach is searched for stretches of brake pressure, and the last one
-    before the slowest point is the one that belongs to this corner. Taking
-    the *first* stretch instead would report a brush of the pedal several
-    hundred metres earlier - correcting a slide on the straight, say - as the
-    brake point for the corner.
+    The event is found as it always was: the approach is searched for
+    stretches of brake pressure, and the last one before the slowest point is
+    the one that belongs to this corner. Taking the *first* stretch instead
+    would report a brush of the pedal several hundred metres earlier -
+    correcting a slide on the straight, say - as the brake point for the
+    corner.
+
+    The release is then searched forward to the corner's end rather than to
+    the slowest point, because a trail carries past the minimum speed. Bounded
+    at the slowest sample, every trail would come back ending exactly there: a
+    number produced by the window, not by the driving.
+
+    Trail length is counted in grid steps rather than subtracted from the two
+    distances, so it stays right for a corner that wraps the start/finish
+    line, where peak and release sit at opposite ends of the array.
     """
     lap_length = float(trace.grid[-1]) + GRID_STEP_M
     # An approach as long as the lap would wrap onto itself and come back as
@@ -111,8 +136,23 @@ def _brake_point(trace: LapTrace, corner: Corner, slowest: int) -> float | None:
     runs = _runs(trace.brake[window] > BRAKE_ON)
     if not runs:
         return None
-    first_of_last_run = window[runs[-1][0]]
-    return float(trace.grid[first_of_last_run])
+    start_index = int(window[runs[-1][0]])
+
+    ahead = span_indices(trace.grid, float(trace.grid[start_index]), corner.end_m)
+    if len(ahead) == 0:
+        return None
+    # The pedal is above BRAKE_ON at ahead[0] and BRAKE_ON > TRAIL_OFF, so this
+    # run always holds at least its first sample and `last` is never -1.
+    released = np.flatnonzero(trace.brake[ahead] <= TRAIL_OFF)
+    last = len(ahead) - 1 if len(released) == 0 else int(released[0]) - 1
+    peak = int(np.argmax(trace.brake[ahead[: last + 1]]))
+
+    return (
+        float(trace.grid[start_index]),
+        float(trace.grid[ahead[peak]]),
+        float(trace.grid[ahead[last]]),
+        float(last - peak) * GRID_STEP_M,
+    )
 
 
 def _throttle_point(trace: LapTrace, corner: Corner, slowest: int) -> float | None:
@@ -147,9 +187,13 @@ def corner_metrics(trace: LapTrace, corner: Corner) -> CornerMetrics:
             + (trace.time_s[head[-1]] - trace.time_s[head[0]])
         )
 
+    shape = _brake_shape(trace, corner, slowest)
     return CornerMetrics(
         corner=corner,
-        brake_point_m=_brake_point(trace, corner, slowest),
+        brake_point_m=None if shape is None else shape[0],
+        brake_peak_m=None if shape is None else shape[1],
+        brake_release_m=None if shape is None else shape[2],
+        trail_length_m=None if shape is None else shape[3],
         entry_speed_kmh=float(trace.speed_kmh[inside[0]]),
         min_speed_kmh=float(trace.speed_kmh[slowest]),
         min_speed_at_m=float(trace.grid[slowest]),
