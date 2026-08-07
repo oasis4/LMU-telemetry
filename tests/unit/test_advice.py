@@ -247,6 +247,46 @@ def test_a_late_throttle_pick_up_with_a_slower_exit():
     assert "throttle point" in found[0].because
 
 
+def test_a_long_trail_with_a_slower_exit_is_told_to_release_earlier():
+    """The entry matched; the brake was still on where the throttle belonged.
+
+    The slower stretch has to reach the corner's last sample, which is where
+    exit speed is read. Ended at 1000 m it stops one sample short, both laps
+    read 200 km/h there, and the rule this test exists for never fires.
+    """
+    fast = np.full(len(grid_for(LAP_M)), 200.0)
+    fast[_index(900.0) : _index(960.0)] = 100.0    # matched through the middle
+    slow = fast.copy()
+    fast[_index(960.0) : _index(1010.0)] = 190.0   # the reference picks up
+    slow[_index(960.0) : _index(1010.0)] = 120.0   # this lap is still slowing
+
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 900.0), speed_kmh=fast)
+    other = _trace(brake=_trail_brake(800.0, 820.0, 980.0), speed_kmh=slow)
+
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "off the brake earlier" in found[0].headline.lower()
+    assert "trail length" in found[0].because
+    assert "exit speed" in found[0].because
+
+
+def test_a_long_trail_with_a_worse_entry_is_not_read_as_the_release():
+    """Both a longer trail and a lower minimum speed.
+
+    The trail rule must not claim this one: with the entry unmatched, the long
+    trail is as likely a consequence - a driver still slowing because they
+    arrived too fast - as a cause. Telling them to release earlier would point
+    them away from the corner they actually entered too quickly.
+    """
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 880.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 820.0, 970.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert found, "a corner this much slower should say something"
+    assert all("off the brake earlier" not in a.headline.lower() for a in found), [
+        a.headline for a in found
+    ]
+
+
 def test_every_piece_of_advice_carries_the_numbers_it_rests_on():
     reference = _trace(brake=_brake_from(800.0), speed_kmh=_slow_through(100.0))
     other = _trace(brake=_brake_from(840.0), speed_kmh=_slow_through(80.0))

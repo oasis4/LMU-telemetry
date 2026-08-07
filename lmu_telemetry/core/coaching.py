@@ -277,6 +277,33 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
             comparison.lost_s,
         )
 
+    # Off the brake much later, with the entry matched and the exit slower:
+    # the brake was still on where the reference was already driving.
+    #
+    # The entry condition is what rules out the alternative. A long trail with
+    # a *worse* minimum speed is a driver still slowing down because they
+    # arrived too fast, not one over-trailing, and telling them to release
+    # earlier would point them away from the corner they actually entered too
+    # quickly.
+    if (
+        trail is not None
+        and trail > ADVICE_TRAIL_M
+        and minimum > -ADVICE_SPEED_KMH
+        and exit_speed < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "Come off the brake earlier here",
+            "You matched the reference into the corner but carried the brake "
+            "further through it, and the time went on the way out.",
+            amounts(
+                f"trail length {trail:+.0f} m",
+                f"exit speed {exit_speed:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
     # Late on the power, with the entry matched: the loss is on the way out.
     #
     # The test is "minimum speed was not worse", not "the exit speed was
