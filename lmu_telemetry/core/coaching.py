@@ -185,6 +185,17 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
     speak. Later braking on its own means nothing - it is what a faster driver
     does. Later braking together with a lower minimum speed and lost time is a
     corner entered too fast to rotate, and that is a claim the numbers carry.
+
+    The rules that read the *shape* of the braking - where pressure peaked and
+    how far it was bled off over - carry that further: each is tied to a
+    minimum or exit speed, and none of them may speak from the shape alone.
+    One driver stops the car and turns it, another carries the brake to the
+    apex, and both are right. Without a result attached, a sentence about the
+    release is technically true and useless to drive on.
+
+    Order matters here. The three shape rules each sit directly above the
+    coarser rule they refine, so the coarse one still catches every corner
+    whose shape says nothing.
     """
     if comparison.lost_s < ADVICE_MIN_LOSS_S:
         return None
