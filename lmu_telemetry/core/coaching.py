@@ -27,6 +27,10 @@ from .trace import LapTrace
 BRAKE_POINT_NOISE_M = 5.0
 SPEED_NOISE_KMH = 1.0
 TIME_NOISE_S = 0.02
+#: A trail length is the gap between two positions on one trace, so its error
+#: is about twice a single position's - which is why this is not
+#: BRAKE_POINT_NOISE_M.
+TRAIL_NOISE_M = 2 * BRAKE_POINT_NOISE_M
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,16 @@ def _differences(reference: CornerMetrics, other: CornerMetrics) -> tuple[Differ
         metres = other.throttle_point_m - reference.throttle_point_m
         if abs(metres) >= BRAKE_POINT_NOISE_M:
             found.append((abs(metres), Difference("throttle point", metres, "m")))
+
+    if reference.brake_release_m is not None and other.brake_release_m is not None:
+        metres = other.brake_release_m - reference.brake_release_m
+        if abs(metres) >= BRAKE_POINT_NOISE_M:
+            found.append((abs(metres), Difference("brake release", metres, "m")))
+
+    if reference.trail_length_m is not None and other.trail_length_m is not None:
+        metres = other.trail_length_m - reference.trail_length_m
+        if abs(metres) >= TRAIL_NOISE_M:
+            found.append((abs(metres), Difference("trail length", metres, "m")))
 
     found.sort(key=lambda entry: -entry[0])
     return tuple(difference for _weight, difference in found)
