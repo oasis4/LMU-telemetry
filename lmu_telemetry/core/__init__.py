@@ -26,8 +26,10 @@ from .coaching import (
     CornerComparison,
     Difference,
     advice,
+    advise_on,
     biggest_losses,
     compare_corners,
+    corner_comparison,
 )
 from .corners import Corner, detect_corners
 from .delta import delta_s, time_lost_over
@@ -62,6 +64,7 @@ __all__ = [
     "TrackKey",
     "TrackModel",
     "advice",
+    "advise_on",
     "apply_names",
     "assess_lap",
     "biggest_losses",
@@ -69,6 +72,7 @@ __all__ = [
     "build_track_model",
     "clean_laps",
     "compare_corners",
+    "corner_comparison",
     "corner_metrics",
     "delta_s",
     "detect_corners",

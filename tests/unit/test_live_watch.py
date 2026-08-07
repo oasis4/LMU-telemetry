@@ -1,0 +1,141 @@
+"""A corner speaks when it is behind the car, once, and only with a story.
+
+The live path must not be a second opinion. Where these tests compare it to
+the post-lap view, they compare it to the *same* functions - the point is that
+one set of rules answers for both, and these are what would notice if that
+stopped being true.
+"""
+
+import pytest
+
+from lmu_telemetry.core.coaching import advise_on, compare_corners
+from lmu_telemetry.core.session import Session
+from lmu_telemetry.core.track_model import build_track_model
+from lmu_telemetry.core.trace import build_trace
+from lmu_telemetry.live.buffer import LapBuffer, LiveSample
+from lmu_telemetry.live.watch import CornerWatch
+
+
+def _drive(trace, corners, reference):
+    """Replay *trace* through a watch, collecting what it says and where."""
+    watch = CornerWatch(reference, corners)
+    buffer = LapBuffer(trace.grid)
+    said = []
+    for i in range(len(trace.grid)):
+        buffer.add(
+            LiveSample(
+                distance_m=float(trace.grid[i]),
+                time_s=float(trace.time_s[i]),
+                speed_kmh=float(trace.speed_kmh[i]),
+                throttle=float(trace.throttle[i]),
+                brake=float(trace.brake[i]),
+                steering=float(trace.steering[i]),
+            )
+        )
+        for finding in watch.advance(buffer):
+            said.append((float(trace.grid[i]), finding))
+    return said
+
+
+@pytest.fixture(scope="module")
+def two_laps(monza_q_file):
+    with Session.open(monza_q_file) as session:
+        model = build_track_model([session])
+        laps = {lap.number: lap for lap in session.laps}
+        fast = build_trace(session, laps[2], model.track_length_m)
+        slow = build_trace(session, laps[1], model.track_length_m)
+    return model, fast, slow
+
+
+def test_a_corner_is_never_reported_before_the_car_has_left_it(two_laps):
+    """The whole design rests on this. A corner measured from a span the car
+    is still inside is measured from values np.interp invented ahead of it."""
+    model, fast, slow = two_laps
+    reported = _drive(slow, model.corners, fast)
+    assert reported, "a lap 5 s off the reference should report something"
+    for at_m, finding in reported:
+        assert at_m >= finding.comparison.corner.end_m, finding.comparison.corner.name
+
+
+def test_each_corner_speaks_at_most_once(two_laps):
+    model, fast, slow = two_laps
+    seen = [f.comparison.corner.index for _at, f in _drive(slow, model.corners, fast)]
+    assert len(seen) == len(set(seen)), seen
+
+
+def test_corners_are_reported_in_the_order_they_are_driven(two_laps):
+    model, fast, slow = two_laps
+    at = [a for a, _f in _drive(slow, model.corners, fast)]
+    assert at == sorted(at)
+
+
+def test_every_corner_of_the_lap_is_accounted_for(two_laps):
+    """Silence must be a decision about a corner, not a corner going missing."""
+    model, fast, slow = two_laps
+    reported = {f.comparison.corner.index for _at, f in _drive(slow, model.corners, fast)}
+    expected = {c.index for c in model.corners if c.start_m <= c.end_m}
+    assert reported == expected
+
+
+def test_a_lap_against_itself_finds_nothing_to_say(two_laps):
+    """Every measurement identical, so no corner has a story."""
+    model, fast, _slow = two_laps
+    said = [f for _at, f in _drive(fast, model.corners, fast) if f.advice is not None]
+    assert said == [], [f.comparison.corner.name for f in said]
+
+
+def test_the_findings_carry_the_same_advice_the_post_lap_view_would(two_laps):
+    """Same corners named, same sentence for each."""
+    model, fast, slow = two_laps
+    live = {
+        f.comparison.corner.index: f.advice
+        for _at, f in _drive(slow, model.corners, fast)
+        if f.advice is not None
+    }
+    offline = {}
+    for comparison in compare_corners(fast, slow, model.corners):
+        tip = advise_on(comparison)
+        if tip is not None:
+            offline[comparison.corner.index] = tip
+
+    assert set(live) == set(offline), (sorted(live), sorted(offline))
+    for index, tip in live.items():
+        assert tip.headline == offline[index].headline
+
+
+def test_live_time_lost_agrees_with_the_post_lap_figure(two_laps):
+    """One is a difference of two corner times, the other the integral of a
+    delta trace. They are the same quantity, and if they drift the panel and
+    the browser disagree about the same corner."""
+    model, fast, slow = two_laps
+    offline = {
+        c.corner.index: c.lost_s for c in compare_corners(fast, slow, model.corners)
+    }
+    for _at, finding in _drive(slow, model.corners, fast):
+        index = finding.comparison.corner.index
+        assert finding.comparison.lost_s == pytest.approx(offline[index], abs=0.02), (
+            finding.comparison.corner.name,
+            finding.comparison.lost_s,
+            offline[index],
+        )
+
+
+def test_a_new_lap_starts_the_corners_again(two_laps):
+    model, fast, slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+    buffer = LapBuffer(slow.grid)
+    for i in range(len(slow.grid)):
+        buffer.add(
+            LiveSample(
+                float(slow.grid[i]), float(slow.time_s[i]), float(slow.speed_kmh[i]),
+                float(slow.throttle[i]), float(slow.brake[i]), float(slow.steering[i]),
+            )
+        )
+        watch.advance(buffer)
+
+    assert watch.advance(buffer) == [], "the lap is over; nothing is left to report"
+    watch.reset()
+    buffer.reset()
+    buffer.add(LiveSample(0.0, 0.0, 100.0, 1.0, 0.0, 0.0))
+    buffer.add(LiveSample(float(slow.grid[-1]), 90.0, 100.0, 1.0, 0.0, 0.0))
+    assert watch.advance(buffer), "a second lap must report its corners too"

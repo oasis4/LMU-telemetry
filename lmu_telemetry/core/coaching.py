@@ -110,6 +110,43 @@ def _differences(reference: CornerMetrics, other: CornerMetrics) -> tuple[Differ
     return tuple(difference for _weight, difference in found)
 
 
+def corner_comparison(
+    corner: Corner,
+    reference: CornerMetrics,
+    other: CornerMetrics,
+    lost_s: float,
+) -> CornerComparison:
+    """One corner's comparison, from metrics that have already been taken.
+
+    Public because the live overlay builds comparisons one corner at a time,
+    as each is completed, and cannot wait for the whole-lap delta that
+    :func:`compare_corners` integrates. Both paths come through here so the
+    list of differences is assembled once: two constructions of a
+    ``CornerComparison`` would be two chances for the panel and the browser to
+    describe one corner differently.
+
+    *lost_s* is the caller's to supply, because the two paths measure it
+    differently and both are right - see :mod:`live.watch`.
+    """
+    return CornerComparison(
+        corner=corner,
+        lost_s=lost_s,
+        reference=reference,
+        other=other,
+        differences=_differences(reference, other),
+    )
+
+
+def advise_on(comparison: CornerComparison) -> "Advice | None":
+    """What to try in this corner, or ``None`` if the data does not say.
+
+    The single-corner entry point. :func:`advice` is the whole-lap one, which
+    also drops a second finding about a braking event it has already named;
+    that guard needs the other corners to exist, so it has nothing to do here.
+    """
+    return _advise(comparison)
+
+
 def compare_corners(
     reference: LapTrace, other: LapTrace, corners
 ) -> list[CornerComparison]:
@@ -119,20 +156,15 @@ def compare_corners(
     otherwise, because two grids mean two different tracks.
     """
     delta = delta_s(reference, other)
-    out = []
-    for corner in corners:
-        reference_metrics = corner_metrics(reference, corner)
-        other_metrics = corner_metrics(other, corner)
-        out.append(
-            CornerComparison(
-                corner=corner,
-                lost_s=time_lost_over(delta, reference.grid, corner),
-                reference=reference_metrics,
-                other=other_metrics,
-                differences=_differences(reference_metrics, other_metrics),
-            )
+    return [
+        corner_comparison(
+            corner,
+            corner_metrics(reference, corner),
+            corner_metrics(other, corner),
+            time_lost_over(delta, reference.grid, corner),
         )
-    return out
+        for corner in corners
+    ]
 
 
 def biggest_losses(comparisons, count: int = 3) -> list[CornerComparison]:

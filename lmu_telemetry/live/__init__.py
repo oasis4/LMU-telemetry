@@ -10,5 +10,6 @@ answer for both, and there is one definition of a brake point rather than two.
 """
 
 from .buffer import LapBuffer, LiveSample
+from .watch import CornerWatch, Finding
 
-__all__ = ["LapBuffer", "LiveSample"]
+__all__ = ["CornerWatch", "Finding", "LapBuffer", "LiveSample"]
