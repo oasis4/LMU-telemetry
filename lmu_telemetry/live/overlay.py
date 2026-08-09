@@ -37,6 +37,8 @@ from __future__ import annotations
 import time
 import tkinter as tk
 
+from .screens import choose_screen, monitors
+
 #: The colour the window paints where it wants to be see-through. A near-black
 #: rather than pure black, so a genuinely black pixel inside the panel is not
 #: punched out along with the background.
@@ -97,12 +99,17 @@ class Overlay:
         position: str = "top-center",
         scale: float = 1.0,
         margin_px: int | None = None,
+        monitor: int | None = None,
     ) -> None:
         if position not in POSITIONS:
             raise ValueError(
                 f"position must be one of {', '.join(POSITIONS)}, got {position!r}"
             )
         _make_dpi_aware()
+        # Before Tk is asked anything. Tk only ever reports the primary
+        # monitor, so on a two-screen desk it would size the panel for one
+        # screen and place it on another.
+        self._monitor = choose_screen(monitor)
 
         self.root = tk.Tk()
         self.root.title("LMU corner coach")
@@ -116,8 +123,8 @@ class Overlay:
             # Not Windows. The panel still draws; it just sits on a rectangle.
             pass
 
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
+        screen_w = self._monitor.width
+        screen_h = self._monitor.height
         k = (screen_h / _BASE_HEIGHT) * scale
         width = int(
             min(max(screen_w * _WIDTH_SHARE, _MIN_WIDTH_PX * k), _MAX_WIDTH_PX * k)
@@ -161,10 +168,14 @@ class Overlay:
         self._tip_pad = (max(2, int(4 * k)), 0)
 
         self._position = position
-        self._screen = (screen_w, screen_h)
         self._width = width
         self._margin = int(28 * k) if margin_px is None else margin_px
         self._relayout()
+
+    @property
+    def monitor(self):
+        """The screen the panel was put on, so a caller can say which."""
+        return self._monitor
 
     def _relayout(self) -> None:
         """Re-fix the window to whatever the content now needs.
@@ -176,20 +187,28 @@ class Overlay:
         self.root.update_idletasks()
         height = self.root.winfo_reqheight()
         x, y = self._place(
-            self._position, *self._screen, self._width, height, self._margin
+            self._position, self._monitor, self._width, height, self._margin
         )
         self.root.geometry(f"{self._width}x{height}+{x}+{y}")
 
     @staticmethod
-    def _place(position, screen_w, screen_h, width, height, margin):
+    def _place(position, monitor, width, height, margin):
+        """Where the window goes, in the virtual desktop's coordinates.
+
+        Every result is offset by the monitor's own origin. That offset is
+        zero for the primary and only for the primary - computing from a width
+        alone, as this used to, is the same as asserting every screen starts
+        at x=0, which is how the panel kept appearing on the wrong one.
+        """
         vertical, _, horizontal = position.partition("-")
         if horizontal == "center":
-            x = (screen_w - width) // 2
+            x = monitor.x + (monitor.width - width) // 2
         elif horizontal == "left":
-            x = margin
+            x = monitor.x + margin
         else:
-            x = screen_w - width - margin
-        y = margin if vertical == "top" else screen_h - height - margin
+            x = monitor.x + monitor.width - width - margin
+        y = (monitor.y + margin if vertical == "top"
+             else monitor.y + monitor.height - height - margin)
         return x, y
 
     def show_delta(self, seconds: float | None) -> None:

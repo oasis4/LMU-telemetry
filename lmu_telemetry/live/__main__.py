@@ -175,11 +175,31 @@ def main(argv: "list[str] | None" = None) -> int:
                              "is the only corner-free choice on a wide screen)")
     parser.add_argument("--scale", type=float, default=1.0,
                         help="size multiplier on top of the screen-derived one")
+    parser.add_argument("--monitor", type=int, default=None,
+                        help="which screen to put the panel on, by index "
+                             "(default: whichever one the game's window is on, "
+                             "falling back to the primary)")
+    parser.add_argument("--screens", action="store_true",
+                        help="list the screens with their indices and exit")
     parser.add_argument("--recordings", type=Path, default=default_recordings_dir(),
                         help="where to look for a reference lap when --reference "
                              "is not given (default: the curated working set, or "
                              "the telemetry folder the launcher was pointed at)")
     args = parser.parse_args(argv)
+
+    if args.screens:
+        from .screens import choose_screen, game_screen, monitors
+
+        found = game_screen()
+        for screen in monitors():
+            here = "  <- the game is on this one" if screen == found else ""
+            print(f"  --monitor {screen.index}   {screen.label}{here}")
+        if found is None:
+            print("\nthe game's window was not found, so the default is the "
+                  "primary. Start the game first, or name one with --monitor.")
+        else:
+            print(f"\ndefault without --monitor: {choose_screen().label}")
+        return 0
 
     if args.probe:
         return _probe()
@@ -226,7 +246,10 @@ def main(argv: "list[str] | None" = None) -> int:
     if not args.no_window:
         from .overlay import Overlay
 
-        overlay = Overlay(position=args.position, scale=args.scale)
+        overlay = Overlay(
+            position=args.position, scale=args.scale, monitor=args.monitor
+        )
+        print(f"panel on:  {overlay.monitor.label}")
 
     buffer = LapBuffer(reference.grid)
     watch = CornerWatch(reference, model.corners)
