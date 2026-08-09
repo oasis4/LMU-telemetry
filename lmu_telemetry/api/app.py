@@ -28,6 +28,7 @@ from ..core import Session, build_trace, clean_laps, compare_corners, delta_s
 from ..core.coaching import advice
 from ..core.metrics import BRAKE_ON, braking_zones
 from ..core.trace import LapTrace, TraceError
+from ..recordings import default_recordings_dir
 from .decimate import TARGET_POINTS, decimate
 from .pool import SessionPool
 
@@ -96,7 +97,7 @@ def create_app(
     cache_dir: "str | Path | None" = None,
 ) -> FastAPI:
     """Build the application. *recordings_dir* is where sessions are read from."""
-    root = Path(recordings_dir) if recordings_dir else Path("data") / "sessions"
+    root = Path(recordings_dir) if recordings_dir else default_recordings_dir()
     cache_root = Path(cache_dir) if cache_dir else Path(".cache") / "traces"
     sessions = pool if pool is not None else SessionPool(
         model_cache_dir=cache_root / "models"

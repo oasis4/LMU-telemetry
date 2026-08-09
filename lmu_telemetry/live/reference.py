@@ -66,10 +66,11 @@ def same_track(a: str, b: str) -> bool:
 def find_reference(recordings: Path, track: str) -> "Reference | None":
     """The quickest clean lap recorded on *track*, or None if there is none.
 
-    Every recording in the directory is opened. That is a second or two for a
-    corpus of a few hundred, and it happens once when a session loads - the
-    alternative, trusting the filename, breaks the moment a file is renamed
-    and fails silently rather than loudly.
+    Every recording in the directory is opened. Measured against the 239
+    recordings on the machine this was written on, that is 7 to 8 seconds, and
+    it happens once while the driver is still in the garage. The alternative,
+    trusting the filename, breaks the moment a file is renamed and fails
+    silently rather than loudly - which is the worse trade at any price.
 
     A recording that cannot be opened or read is skipped rather than raising.
     One damaged file in a directory is not a reason to leave the driver with

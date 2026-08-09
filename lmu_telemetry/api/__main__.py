@@ -10,6 +10,7 @@ from pathlib import Path
 
 import uvicorn
 
+from ..recordings import default_recordings_dir
 from .app import create_app
 
 
@@ -18,8 +19,9 @@ def main() -> None:
     parser.add_argument(
         "--recordings",
         type=Path,
-        default=Path("data") / "sessions",
-        help="directory of .duckdb recordings to serve",
+        default=default_recordings_dir(),
+        help="directory of .duckdb recordings to serve (default: the curated "
+             "working set, or the folder the launcher was pointed at)",
     )
     parser.add_argument("--cache", type=Path, default=Path(".cache") / "traces")
     parser.add_argument("--host", default="127.0.0.1")

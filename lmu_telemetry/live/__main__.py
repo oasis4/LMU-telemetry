@@ -24,6 +24,7 @@ import numpy as np
 from ..core.session import Session
 from ..core.track_model import build_track_model
 from ..core.trace import build_trace
+from ..recordings import default_recordings_dir
 from .buffer import LapBuffer
 from .overlay import POSITIONS
 from .replay import replay
@@ -174,9 +175,10 @@ def main(argv: "list[str] | None" = None) -> int:
                              "is the only corner-free choice on a wide screen)")
     parser.add_argument("--scale", type=float, default=1.0,
                         help="size multiplier on top of the screen-derived one")
-    parser.add_argument("--recordings", type=Path, default=Path("data") / "sessions",
+    parser.add_argument("--recordings", type=Path, default=default_recordings_dir(),
                         help="where to look for a reference lap when --reference "
-                             "is not given (default: data/sessions)")
+                             "is not given (default: the curated working set, or "
+                             "the telemetry folder the launcher was pointed at)")
     args = parser.parse_args(argv)
 
     if args.probe:
