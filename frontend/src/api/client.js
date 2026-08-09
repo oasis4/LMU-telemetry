@@ -65,6 +65,10 @@ export function createClient({ base = DEFAULT_BASE, fetcher = fetch } = {}) {
     laps: (name) => get(`/api/sessions/${encodeURIComponent(name)}/laps`).then((b) => b.laps),
     track: (name) => get(`/api/sessions/${encodeURIComponent(name)}/track`),
 
+    // No toTypedSeries: this answer carries no measurement arrays, only a few
+    // dozen numbers. Wrapping them in Float64Array would say otherwise.
+    ideal: (name) => get(`/api/sessions/${encodeURIComponent(name)}/ideal`),
+
     async map(name, { full = false } = {}) {
       const body = await get(`/api/sessions/${encodeURIComponent(name)}/map`, {
         full: full || undefined,

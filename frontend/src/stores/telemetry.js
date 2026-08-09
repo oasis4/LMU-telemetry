@@ -37,6 +37,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   // Bulk measurements: replaced wholesale, never mutated in place.
   const comparison = shallowRef(null)
   const trace = shallowRef(null)
+  const ideal = shallowRef(null)
 
   const selection = ref({
     reference: null,
@@ -126,6 +127,14 @@ export const useTelemetryStore = defineStore('telemetry', () => {
       return trace.value
     })
 
+  const loadIdeal = (name) =>
+    run(async () => {
+      // markRaw for the same reason as the others: nothing here is mutated,
+      // and a deep proxy over the block list buys nothing.
+      ideal.value = markRaw(await client.ideal(name))
+      return ideal.value
+    })
+
   function select(patch) {
     selection.value = { ...selection.value, ...patch }
   }
@@ -133,6 +142,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
   function reset() {
     comparison.value = null
     trace.value = null
+    ideal.value = null
     corners.value = []
     error.value = null
   }
@@ -147,6 +157,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     error,
     comparison,
     trace,
+    ideal,
     selection,
     cleanLaps,
     ready,
@@ -157,6 +168,7 @@ export const useTelemetryStore = defineStore('telemetry', () => {
     loadTrack,
     loadComparison,
     loadTrace,
+    loadIdeal,
     select,
     reset,
   }
