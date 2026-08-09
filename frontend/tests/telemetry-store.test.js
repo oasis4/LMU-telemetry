@@ -213,4 +213,32 @@ describe('what a view watches to know the selection changed', () => {
                    other: '1b.duckdb', otherLap: 5 })
     expect(store.selectionKey).not.toBe(first)
   })
+
+  it('holds an ideal lap, and reports the reason one was refused', async () => {
+    const store = useTelemetryStore()
+    store.client.ideal = returns({ ideal_s: 101.212, sound: true, blocks: [], seams: [] })
+
+    await store.loadIdeal('a.duckdb')
+    expect(store.ideal.ideal_s).toBeCloseTo(101.212, 6)
+    expect(store.error).toBeNull()
+
+    // The refusal is the common answer for a recording with one usable lap,
+    // so it has to land somewhere the view can show it.
+    store.client.ideal = async () => {
+      throw new Error("'a.duckdb' has 1 usable lap of 3.")
+    }
+    await store.loadIdeal('a.duckdb')
+    expect(store.error).toMatch(/1 usable lap of 3/)
+  })
+
+  it('forgets the ideal lap when the store is reset', async () => {
+    // Left behind, it would sit under a different recording's name - the same
+    // fault the selectionKey watch exists to prevent for a comparison.
+    const store = useTelemetryStore()
+    store.client.ideal = returns({ ideal_s: 101.212, sound: true, blocks: [], seams: [] })
+    await store.loadIdeal('a.duckdb')
+
+    store.reset()
+    expect(store.ideal).toBeNull()
+  })
 })

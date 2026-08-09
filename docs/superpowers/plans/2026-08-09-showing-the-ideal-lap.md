@@ -363,10 +363,14 @@ After `loadTrace`:
 
 Add `ideal` and `loadIdeal` to the returned object, and set `ideal.value = null` inside `reset()`.
 
-- [ ] **Step 3: Verify it compiles**
+- [ ] **Step 3: Extend the existing tests**
 
-Run from `frontend/`: `npm install` then `npm run build`
-Expected: build succeeds. `npm install` is required — `node_modules` is not present in this checkout.
+`frontend/tests/client.test.js` and `frontend/tests/telemetry-store.test.js` already exist and cover every other client method and store action. Add to them: that `ideal` is asked for by recording alone with no lap number and no query string; that the body comes back as plain numbers rather than typed arrays; that a 422's `detail` reaches the caller; that `loadIdeal` fills `store.ideal` and that a refusal lands in `store.error`; and that `reset()` clears it.
+
+- [ ] **Step 4: Verify**
+
+Run from `frontend/`: `npm install`, then `npx vitest run` and `npm run build`
+Expected: green. `npm install` is required — `node_modules` is not in the checkout.
 
 - [ ] **Step 4: Commit**
 
@@ -391,7 +395,7 @@ git add frontend/src/api/client.js frontend/src/stores/telemetry.js && git commi
 
 `spanIndices` is new, not extracted. `TrackMap.zonePath` clamps rather than wraps, because the server pre-splits braking zones into two ranges. A block that holds the start/finish line arrives as one range with `start_m > end_m` and must be split here.
 
-There are no frontend tests in this project yet. `vitest`, `jsdom` and `@vue/test-utils` are already declared in `frontend/package.json`, and `vite.config.js` already points `include` at `tests/**/*.test.js`. Only the directory and the first file are missing.
+The frontend already has 8 test files and 86 tests in `frontend/tests/` — including `track-map.test.js`, which guards this extraction, and `client.test.js` and `telemetry-store.test.js`, which Task 3 should have extended. Run `npm install` first; `node_modules` is not in the checkout.
 
 - [ ] **Step 1: Write the failing test**
 

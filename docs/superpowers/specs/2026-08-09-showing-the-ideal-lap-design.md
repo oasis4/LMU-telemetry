@@ -130,7 +130,11 @@ Sound seams are not decorated. A mark on every join would make the marks mean
   the kind of line that later reads as dead weight and gets tidied away.
 - `seam_limit_kmh` in the response equals `blocks.SEAM_SPEED_KMH`, so the two
   cannot drift apart unnoticed.
-- `track-projection.js` extraction: `TrackMap` renders as before.
+- `track-projection.js` extraction: `TrackMap` renders as before. The existing
+  `frontend/tests/track-map.test.js` already guards this, so the extraction is
+  covered without new tests being written for it.
+- `client.ideal` and `store.loadIdeal`, in the existing `client.test.js` and
+  `telemetry-store.test.js`.
 
 ## Out of scope
 

@@ -21,6 +21,8 @@
  */
 import { computed, ref } from 'vue'
 
+import { pointAt, project } from './track-projection.js'
+
 const props = defineProps({
   map: { type: Object, required: true },
   losses: { type: Object, default: () => ({}) },
@@ -32,39 +34,14 @@ const props = defineProps({
 })
 const emit = defineEmits(['select'])
 
-const PADDING = 22
 const NOISE_S = 0.02
 
 const mode = ref('time')
 
-const frame = computed(() => {
-  const { x, y } = props.map
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-  for (let i = 0; i < x.length; i += 1) {
-    if (x[i] < minX) minX = x[i]
-    if (x[i] > maxX) maxX = x[i]
-    if (y[i] < minY) minY = y[i]
-    if (y[i] > maxY) maxY = y[i]
-  }
-  const width = maxX - minX || 1
-  const height = maxY - minY || 1
-  // One scale for both axes: a circuit stretched to fill a box is no longer
-  // the shape of that circuit. Taking the larger extent also keeps it inside
-  // the box when the circuit is taller than it is wide.
-  const scale = (props.size - 2 * PADDING) / Math.max(width, height)
-  return {
-    minX, minY, scale,
-    offsetX: PADDING + (props.size - 2 * PADDING - width * scale) / 2,
-    offsetY: PADDING + (props.size - 2 * PADDING - height * scale) / 2,
-  }
-})
+const frame = computed(() => project(props.map, props.size))
 
 function toPoint(index) {
-  const { minX, minY, scale, offsetX, offsetY } = frame.value
-  const px = offsetX + (props.map.x[index] - minX) * scale
-  // SVG's y grows downward; drawn without flipping, every circuit is mirrored.
-  const py = props.size - (offsetY + (props.map.y[index] - minY) * scale)
-  return `${px.toFixed(1)},${py.toFixed(1)}`
+  return pointAt(props.map, frame.value, props.size, index)
 }
 
 function pathFrom(first, last) {
