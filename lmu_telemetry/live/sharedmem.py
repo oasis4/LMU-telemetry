@@ -40,12 +40,13 @@ error accumulating over a lap.
 from __future__ import annotations
 
 import ctypes
-import mmap
 
 from .buffer import LiveSample
 
 #: The game's mapping, and the event it signals a fresh frame with.
 MAPPING = "LMU_Data"
+#: Win32 FILE_MAP_READ, for asking whether the mapping is there at all.
+FILE_MAP_READ = 0x0004
 #: How many cars the layout has room for. From SharedMemoryInterface.hpp.
 MAX_VEHICLES = 104
 #: Number of entries in SharedMemoryEvent, which sizes the events array.
@@ -463,44 +464,118 @@ class _ObjectOut(ctypes.Structure):
     ]
 
 
-def _explain() -> str:
-    return (
-        "cannot open Le Mans Ultimate's shared memory. The game must be "
-        "running and in a session. LMU publishes this itself - no third-party "
-        "plugin is needed - so if the game is running and this still fails, "
-        "check that it is the same machine and user account."
-    )
+class _MemoryInfo(ctypes.Structure):
+    """VIRTUAL_MEMORY_BASIC_INFORMATION, enough of it to read RegionSize."""
+
+    _fields_ = [
+        ("BaseAddress", ctypes.c_void_p),
+        ("AllocationBase", ctypes.c_void_p),
+        ("AllocationProtect", ctypes.c_uint32),
+        ("PartitionId", ctypes.c_uint16),
+        ("RegionSize", ctypes.c_size_t),
+        ("State", ctypes.c_uint32),
+        ("Protect", ctypes.c_uint32),
+        ("Type", ctypes.c_uint32),
+    ]
+
+
+def _kernel32():
+    """kernel32 with the three calls this needs, typed.
+
+    Typed rather than left to ctypes' defaults because every one of these
+    returns or takes a pointer, and on 64-bit a handle truncated to a C int is
+    a handle that closes something else.
+    """
+    dll = ctypes.WinDLL("kernel32", use_last_error=True)
+    dll.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+    dll.OpenFileMappingW.restype = ctypes.c_void_p
+    dll.MapViewOfFile.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+        ctypes.c_size_t,
+    ]
+    dll.MapViewOfFile.restype = ctypes.c_void_p
+    dll.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+    dll.CloseHandle.argtypes = [ctypes.c_void_p]
+    dll.VirtualQuery.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_MemoryInfo), ctypes.c_size_t
+    ]
+    return dll
+
+
+def mapping_exists(name: str) -> bool:
+    """Whether *name* has been published by anything at all.
+
+    Asked separately from mapping it, because "the game is not running" and
+    "the game is running and these structs are the wrong size" are different
+    problems with different fixes, and one failure blaming the game for both
+    sends the reader off to restart something that was never wrong.
+    """
+    dll = _kernel32()
+    handle = dll.OpenFileMappingW(FILE_MAP_READ, False, name)
+    if not handle:
+        return False
+    dll.CloseHandle(handle)
+    return True
 
 
 class LiveTelemetry:
     """The player's car, one sample at a time, from the running game."""
 
     def __init__(self) -> None:
-        try:
-            probe = mmap.mmap(-1, 0, MAPPING, access=mmap.ACCESS_READ)
-        except OSError as exc:
-            raise SharedMemoryUnavailable(_explain()) from exc
-
         expected = ctypes.sizeof(_ObjectOut)
-        actual = len(probe)
+        dll = _kernel32()
+
+        # OpenFileMapping, never mmap. `mmap.mmap(-1, n, name)` does not open a
+        # named mapping, it *creates* one - so against a name the game is not
+        # publishing it quietly hands back a fresh page of zeros, and the panel
+        # then shows a stationary car sitting confidently on the start line.
+        # This call can only ever open something that already exists.
+        handle = dll.OpenFileMappingW(FILE_MAP_READ, False, MAPPING)
+        if not handle:
+            raise SharedMemoryUnavailable(
+                f"cannot find {MAPPING}. Le Mans Ultimate must be running and "
+                f"in a session, on this machine and under this user account."
+            )
+
+        address = dll.MapViewOfFile(handle, FILE_MAP_READ, 0, 0, 0)
+        if not address:
+            error = ctypes.get_last_error()
+            dll.CloseHandle(handle)
+            raise SharedMemoryUnavailable(
+                f"{MAPPING} is published but could not be mapped (error {error})."
+            )
+
+        info = _MemoryInfo()
+        dll.VirtualQuery(address, ctypes.byref(info), ctypes.sizeof(info))
+        actual = int(info.RegionSize)
         if actual < expected:
-            probe.close()
-            # The game created the mapping from its own sizeof. A disagreement
-            # means the structs here do not match the game installed, and every
+            dll.UnmapViewOfFile(address)
+            dll.CloseHandle(handle)
+            # Windows rounds a mapping up to a whole page, so the game's own
+            # sizeof is somewhere in (actual - 4096, actual]. Coming in over
+            # that means these structs are bigger than the game's, and every
             # value read past the first difference would be plausible and
             # wrong - so this is fatal rather than a warning.
             raise SharedMemoryUnavailable(
-                f"{MAPPING} is {actual} bytes but this build expects "
-                f"{expected}. The struct definitions in sharedmem.py do not "
-                f"match this version of the game; re-transcribe them from "
+                f"{MAPPING} is {actual} bytes and this build needs {expected}. "
+                f"The struct definitions in sharedmem.py do not match this "
+                f"version of the game; re-transcribe them from "
                 f"<LMU install>/Support/SharedMemoryInterface/."
             )
-        self._mm = probe
+
+        self._dll = dll
+        self._handle = handle
+        self._address = address
         self._size = expected
         self._odometer = Odometer()
 
     def _read(self) -> _ObjectOut:
-        return _ObjectOut.from_buffer_copy(self._mm[: self._size])
+        # Copied out before it is read field by field. The game writes into
+        # this while we look at it, and a struct read in place would mix two
+        # frames together in the middle of a lap.
+        return _ObjectOut.from_buffer_copy(
+            ctypes.string_at(self._address, self._size)
+        )
 
     def track_name(self) -> str:
         """The circuit the game has loaded, or "" when it has none.
@@ -573,7 +648,13 @@ class LiveTelemetry:
         return None
 
     def close(self) -> None:
-        self._mm.close()
+        """Both halves, and tolerant of being called twice."""
+        address, self._address = getattr(self, "_address", None), None
+        handle, self._handle = getattr(self, "_handle", None), None
+        if address:
+            self._dll.UnmapViewOfFile(address)
+        if handle:
+            self._dll.CloseHandle(handle)
 
     def __enter__(self):
         return self

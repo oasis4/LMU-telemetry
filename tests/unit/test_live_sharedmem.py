@@ -118,3 +118,63 @@ def test_the_player_is_found_by_id_and_not_by_index():
     found = sharedmem.LiveTelemetry._player_scoring(state, 22)
     assert found is not None and found.mID == 22
     assert sharedmem.LiveTelemetry._player_scoring(state, 99) is None
+
+
+# -- opening the mapping ---------------------------------------------------
+
+
+def test_a_named_mapping_is_found_only_while_it_exists():
+    """The probe that lets the two failures be told apart.
+
+    "The game is not running" and "the game is running and these structs are
+    the wrong size" need different fixes, and a single failure that blames the
+    game for both sends the reader off to restart something that was fine.
+    """
+    import mmap
+
+    name = "lmu_telemetry_test_mapping"
+    assert not sharedmem.mapping_exists(name), "left over from an earlier run"
+
+    holder = mmap.mmap(-1, 4096, name)
+    try:
+        assert sharedmem.mapping_exists(name)
+    finally:
+        holder.close()
+    assert not sharedmem.mapping_exists(name)
+
+
+def test_mmap_creates_where_this_must_only_open():
+    """Why the reader uses OpenFileMapping and not mmap.
+
+    ``mmap.mmap(-1, n, name)`` does not open a named mapping, it *creates*
+    one. Pointed at a name nothing is publishing it succeeds and hands back a
+    page of zeros - and a reader built on that shows a stationary car sitting
+    confidently on the start line instead of saying the game is not running.
+
+    This asserts the trap is real, so that anyone tempted back to mmap for
+    being tidier can see what it costs.
+    """
+    import mmap
+
+    name = "lmu_telemetry_nothing_publishes_this"
+    assert not sharedmem.mapping_exists(name)
+
+    invented = mmap.mmap(-1, 4096, name, access=mmap.ACCESS_WRITE)
+    try:
+        assert invented[:16] == b"\x00" * 16, "zeros, out of thin air"
+    finally:
+        invented.close()
+
+
+def test_the_game_being_absent_does_not_read_as_a_wrong_transcription():
+    """Whichever it is, the reader is told which."""
+    if sharedmem.mapping_exists(sharedmem.MAPPING):
+        pytest.skip("the game is running, so the absent case cannot be made")
+
+    with pytest.raises(sharedmem.SharedMemoryUnavailable) as raised:
+        sharedmem.LiveTelemetry()
+    said = str(raised.value)
+    assert "must be running" in said
+    assert "re-transcribe" not in said.lower(), (
+        "an absent game was reported as a struct mismatch"
+    )
