@@ -13,6 +13,7 @@ const { comparison } = storeToRefs(store)
       <div class="logo">LMU <span class="accent">Telemetry</span></div>
       <nav>
         <router-link :to="{ name: 'compare' }">Compare</router-link>
+        <router-link :to="{ name: 'ideal' }">Ideal lap</router-link>
         <router-link :to="{ name: 'sessions' }">Recordings</router-link>
       </nav>
       <div v-if="comparison" class="context">
