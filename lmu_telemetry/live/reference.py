@@ -26,6 +26,25 @@ from pathlib import Path
 from ..core.quality import clean_laps
 from ..core.session import Session
 
+#: How far a recording's measured length may sit from the game's own before it
+#: is taken to be a different layout of the same circuit.
+#:
+#: The name is not enough. Monza's full course and its Curva Grande variant
+#: both report the track name "Autodromo Nazionale Monza", and the game says
+#: only that name - there is no layout anywhere in its shared memory. So the
+#: length is the only thing that tells them apart, and getting it wrong is not
+#: a near miss: a reference from the wrong variant is 40 m and two corners
+#: away, and every delta measured against it is nonsense.
+#:
+#: Worse, the failure favours itself. The shorter layout is quicker *because*
+#: it is shorter, so "the quickest clean lap at Monza" picks it every time.
+#:
+#: The number is measured, not chosen. Across the corpus this was written
+#: against, one layout's recorded length varies by at most 6.3 m between
+#: sessions, and the closest two layouts of one circuit are 29.3 m apart -
+#: Monza's pair. Fifteen is twice the first and half the second.
+LAYOUT_TOLERANCE_M = 15.0
+
 
 @dataclass(frozen=True)
 class Reference:
@@ -63,7 +82,21 @@ def same_track(a: str, b: str) -> bool:
     return left == right or left in right or right in left
 
 
-def find_reference(recordings: Path, track: str) -> "Reference | None":
+def same_layout(recorded_m: "float | None", loaded_m: "float | None") -> bool:
+    """Whether two measured lengths are the same layout of a circuit.
+
+    Either being unknown is a yes. A recording that never measured its length
+    is not evidence of a different layout, and refusing it would leave a
+    driver with no reference over a fact nobody asserted.
+    """
+    if not recorded_m or not loaded_m:
+        return True
+    return abs(recorded_m - loaded_m) <= LAYOUT_TOLERANCE_M
+
+
+def find_reference(
+    recordings: Path, track: str, length_m: "float | None" = None
+) -> "Reference | None":
     """The quickest clean lap recorded on *track*, or None if there is none.
 
     Every recording in the directory is opened. Measured against the 239
@@ -81,6 +114,8 @@ def find_reference(recordings: Path, track: str) -> "Reference | None":
         try:
             with Session.open(path) as session:
                 if not same_track(session.info.track, track):
+                    continue
+                if not same_layout(session.track_length_m, length_m):
                     continue
                 for lap in clean_laps(session):
                     if lap.duration_s is None:

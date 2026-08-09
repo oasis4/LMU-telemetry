@@ -253,3 +253,77 @@ def test_a_new_lap_starts_the_corners_again(two_laps):
     buffer.add(LiveSample(0.0, 0.0, 100.0, 1.0, 0.0, 0.0))
     buffer.add(LiveSample(float(slow.grid[-1]), 90.0, 100.0, 1.0, 0.0, 0.0))
     assert watch.advance(buffer), "a second lap must report its corners too"
+
+
+# -- saying so when the corner was good ------------------------------------
+
+
+def _corner():
+    from lmu_telemetry.core.corners import Corner
+
+    return Corner(index=1, name="T1", start_m=100.0, apex_m=150.0, end_m=200.0,
+                  radius_m=50.0, heading_deg=90.0, direction="L")
+
+
+def _metrics(corner):
+    """Identical numbers on both sides, so only lost_s decides the verdict."""
+    from lmu_telemetry.core.metrics import CornerMetrics
+
+    return CornerMetrics(
+        corner=corner, brake_point_m=120.0, brake_peak_m=130.0,
+        brake_release_m=160.0, trail_length_m=30.0, entry_speed_kmh=200.0,
+        min_speed_kmh=120.0, min_speed_at_m=150.0, throttle_point_m=170.0,
+        exit_speed_kmh=180.0, time_s=3.0,
+    )
+
+
+def _finding(lost_s, advice=None, repeats=False):
+    from lmu_telemetry.core.coaching import corner_comparison
+    from lmu_telemetry.live.watch import Finding
+
+    corner = _corner()
+    same = _metrics(corner)
+    return Finding(
+        comparison=corner_comparison(corner, same, same, lost_s=lost_s),
+        advice=advice,
+        repeats_braking=repeats,
+    )
+
+
+def test_a_corner_that_gained_time_is_told_so():
+    """Asked for directly: when the corner was good, say it was good. Silence
+    reads as "nothing measured", which is a different thing entirely."""
+    said = _finding(lost_s=-0.279).praise
+    assert said is not None
+    assert "0.279" in said
+
+
+def test_a_corner_level_with_the_reference_is_told_so():
+    said = _finding(lost_s=0.004).praise
+    assert said is not None
+    assert "0.004" not in said, "a figure inside the noise is not a figure"
+
+
+def test_a_corner_that_lost_time_is_not_praised():
+    assert _finding(lost_s=0.252).praise is None
+
+
+def test_praise_never_competes_with_advice():
+    """Something to change beats something to feel good about."""
+    from lmu_telemetry.core.coaching import Advice
+
+    item = Advice(_corner(), "Try braking earlier here", "detail", "because", -0.3)
+    found = _finding(lost_s=-0.3, advice=item)
+    assert found.to_say is item
+    assert found.praise is None
+
+
+def test_a_suppressed_repeat_does_not_become_praise():
+    """Ascari is three corners and one stop. The second and third are silent
+    because they would repeat the first, not because they went well."""
+    from lmu_telemetry.core.coaching import Advice
+
+    item = Advice(_corner(), "Try braking earlier here", "detail", "because", -0.3)
+    found = _finding(lost_s=-0.3, advice=item, repeats=True)
+    assert found.to_say is None
+    assert found.praise is None

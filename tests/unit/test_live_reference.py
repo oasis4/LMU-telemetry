@@ -147,3 +147,75 @@ def test_a_missing_recordings_directory_is_reported_not_ignored(tmp_path):
 
     missing = tmp_path / "not-here"
     assert _await_reference(_Game(MONZA), missing, patience_s=5.0) is None
+
+
+# -- telling two layouts of one circuit apart ------------------------------
+#
+# Measured across the corpus this was written against: within one layout the
+# recorded length varies by at most 6.3 m, and the closest two layouts of the
+# same circuit are 29.3 m apart - Monza's full course against its Curva Grande
+# variant. LAYOUT_TOLERANCE_M sits between those two numbers.
+
+
+def test_the_tolerance_lies_between_measurement_spread_and_a_real_variant():
+    """Pinned so neither number can be widened without meeting the other."""
+    from lmu_telemetry.live.reference import LAYOUT_TOLERANCE_M
+
+    assert LAYOUT_TOLERANCE_M > 6.3, "would reject the right layout"
+    assert LAYOUT_TOLERANCE_M < 29.3, "would accept Monza's Curva Grande"
+
+
+def test_the_two_layouts_of_monza_are_told_apart(fixture_dir):
+    """The bug this exists for, and the fixtures happen to hold both variants.
+
+    Both report the track name 'Autodromo Nazionale Monza' and the game says
+    only that name, so matching on it alone picks whichever lap is quickest -
+    systematically the *shorter* layout, because it is shorter. Every delta
+    measured against it is then nonsense: 40 m and two corners out.
+    """
+    from lmu_telemetry.live.reference import find_reference
+
+    short = find_reference(fixture_dir, MONZA, length_m=5741.0)
+    full = find_reference(fixture_dir, MONZA, length_m=5780.6)
+    assert short is not None and full is not None
+
+    with Session.open(short.path) as session:
+        assert session.info.layout == "Monza Curva Grande Circuit"
+    with Session.open(full.path) as session:
+        assert session.info.layout == "Autodromo Nazionale Monza"
+    assert short.path != full.path
+
+
+def test_asking_for_the_full_course_never_returns_the_short_one(fixture_dir):
+    """Which is what happened live: the reference came back 5740.9 m and nine
+    corners while the game was running the 5780.6 m course with eleven."""
+    from lmu_telemetry.live.reference import find_reference
+
+    found = find_reference(fixture_dir, MONZA, length_m=5780.6)
+    with Session.open(found.path) as session:
+        assert abs(session.track_length_m - 5780.6) <= 15.0
+
+
+def test_the_length_is_optional_and_omitting_it_changes_nothing(fixture_dir):
+    """A caller with no length - a replay, or a game that will not say - gets
+    the old behaviour rather than nothing at all."""
+    from lmu_telemetry.live.reference import find_reference
+
+    assert find_reference(fixture_dir, MONZA) is not None
+    assert find_reference(fixture_dir, MONZA, length_m=None) is not None
+
+
+def test_a_length_inside_the_tolerance_is_accepted(fixture_dir):
+    """Measured length varies by a few metres between laps of one layout, so
+    an exact match would reject the right recording."""
+    from lmu_telemetry.live.reference import LAYOUT_TOLERANCE_M, find_reference
+
+    exact = find_reference(fixture_dir, MONZA)
+    with Session.open(exact.path) as session:
+        recorded = session.track_length_m
+
+    for offset in (0.0, LAYOUT_TOLERANCE_M - 0.5, -(LAYOUT_TOLERANCE_M - 0.5)):
+        assert find_reference(fixture_dir, MONZA, length_m=recorded + offset)
+    assert find_reference(
+        fixture_dir, MONZA, length_m=recorded + LAYOUT_TOLERANCE_M + 1
+    ) is None

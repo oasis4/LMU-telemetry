@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from ..core.coaching import (
     SAME_BRAKING_M,
+    TIME_NOISE_S,
     Advice,
     CornerComparison,
     advise_on,
@@ -60,6 +61,35 @@ class Finding:
         lives here rather than in each caller's memory.
         """
         return None if self.repeats_braking else self.advice
+
+    @property
+    def praise(self) -> "str | None":
+        """Said when the corner went well and there is nothing to change.
+
+        Silence and "that was good" are different answers, and a panel that
+        only ever speaks up to criticise leaves the driver unable to tell "you
+        matched the reference" from "nothing was measured here". So a corner
+        that gained time, or matched within the noise, says so.
+
+        Never alongside advice. Something to change beats something to feel
+        good about, and a corner that gained a tenth on entry while giving it
+        back on exit has a sentence worth more than praise.
+
+        Never in place of a suppressed repeat either. The second and third
+        corners of Ascari are quiet because they would say the same thing as
+        the first, not because they went well - and praising them there would
+        be inventing a verdict out of a formatting decision.
+        """
+        if self.advice is not None:
+            return None
+        lost = self.comparison.lost_s
+        if lost < -TIME_NOISE_S:
+            return f"Good - {abs(lost):.3f} s up on the reference here"
+        if abs(lost) <= TIME_NOISE_S:
+            # No figure: inside the noise there is nothing to quote that would
+            # not be quoting the measurement error.
+            return "Level with the reference here"
+        return None
 
 
 class CornerWatch:

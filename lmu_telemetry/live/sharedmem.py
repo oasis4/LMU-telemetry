@@ -85,6 +85,9 @@ class Odometer:
         self._anchor_m: float | None = None
         self._carried_m = 0.0
         self._at: float | None = None
+        #: Set at the line: the distance the new lap must fall below before it
+        #: has really begun. See :meth:`advance`.
+        self._rolling_over_from: float | None = None
 
     def forget(self) -> None:
         """The car went away - to the menus, or to the pits from a replay.
@@ -97,11 +100,39 @@ class Odometer:
         self._anchor_m = None
         self._carried_m = 0.0
         self._at = None
+        self._rolling_over_from = None
 
     def advance(
         self, lap_dist: float, lap: int, speed_ms: float, elapsed: float
     ) -> "float | None":
-        """Where the car is now, or ``None`` if this frame cannot be true."""
+        """Where the car is now, or ``None`` if this frame cannot be true.
+
+        The lap counter comes from telemetry at about 50 Hz and ``mLapDist``
+        from scoring at about 5 Hz, so for up to 200 ms after the line the lap
+        has advanced while the distance still belongs to the lap before it.
+        Anchoring there starts the new lap at 5770 m, every corner is already
+        behind the car, and the whole lap goes by in silence - which is what
+        three laps at Monza did, findings for the first and nothing after.
+
+        So a lap change does not anchor. It waits for the distance to fall
+        below where it was, which is the line itself passing, and reports
+        nothing until then. Two hundred milliseconds of no answer is the
+        honest reading; the alternative is a confident wrong one.
+        """
+        if self._lap is not None and lap != self._lap:
+            # Remember where we were, and say nothing until it wraps.
+            self._rolling_over_from = self._anchor_m
+            self._lap = lap
+            self._anchor_m = None
+            self._at = None
+            self._carried_m = 0.0
+
+        if self._rolling_over_from is not None:
+            if lap_dist >= self._rolling_over_from:
+                return None                      # scoring has not caught up
+            self._rolling_over_from = None
+            return self._anchor(lap_dist, lap, elapsed)
+
         if lap != self._lap or self._anchor_m is None or self._at is None:
             return self._anchor(lap_dist, lap, elapsed)
 
@@ -114,7 +145,14 @@ class Odometer:
             # The allowance scales with the gap, or a stall in the reader
             # looks like a teleport. The constant term covers the case where
             # two frames carry the same elapsed time.
-            if abs(lap_dist - self._anchor_m) > MAX_PLAUSIBLE_MS * (step + 0.25):
+            #
+            # Forward only. A car cannot appear 3 km further on, but it *can*
+            # appear far behind, because that is the start/finish line - and
+            # reading that as a bad frame is what wedged this permanently:
+            # the anchor stayed at 5775 m, every later frame differed from it
+            # by more than the allowance, and none was ever believed again.
+            gap = lap_dist - self._anchor_m
+            if gap > MAX_PLAUSIBLE_MS * (step + 0.25):
                 return None
             return self._anchor(lap_dist, lap, elapsed)
 
@@ -587,6 +625,16 @@ class LiveTelemetry:
         """
         raw = self._read().scoring.scoringInfo.mTrackName
         return raw.decode("utf-8", "replace").strip() if raw else ""
+
+    def track_length_m(self) -> float:
+        """How long the loaded course is, or 0.0 before one is loaded.
+
+        The only thing that tells two layouts of one circuit apart. The name
+        does not: Monza's full course and its Curva Grande variant are both
+        "Autodromo Nazionale Monza" here, and there is no layout field
+        anywhere in this mapping to ask instead.
+        """
+        return float(self._read().scoring.scoringInfo.mLapDist)
 
     def sample(self) -> "tuple[LiveSample, int] | None":
         """One instant of the player's car and its lap number, or None.

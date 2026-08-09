@@ -100,7 +100,13 @@ def _await_reference(live, recordings: Path, patience_s: float = 120.0):
         if not track:
             time.sleep(1.0)
 
-    print(f"circuit:   {track}")
+    # The length, not just the name. Two layouts of one circuit share a name
+    # and the game names no layout, so without this the quickest lap "at
+    # Monza" is systematically the short variant - it is quicker for being
+    # shorter - and every delta is measured against a different track.
+    length_m = live.track_length_m() if hasattr(live, "track_length_m") else None
+    print(f"circuit:   {track}"
+          + (f", {length_m / 1000:.3f} km" if length_m else ""))
     if not recordings.is_dir():
         print(
             f"no recordings directory at {recordings}. Point --recordings at "
@@ -109,14 +115,28 @@ def _await_reference(live, recordings: Path, patience_s: float = 120.0):
         )
         return None
 
-    found = find_reference(recordings, track)
+    found = find_reference(recordings, track, length_m=length_m)
     if found is None:
-        print(
-            f"nothing recorded at {track} yet, so there is nothing to measure "
-            f"against. Drive a lap with the game's own telemetry logging on, "
-            f"or name a lap from elsewhere with --reference.",
-            file=sys.stderr,
-        )
+        # Said apart, because they lead to different next moves: drive a lap
+        # here, against you have laps here but on the other layout.
+        elsewhere = find_reference(recordings, track) if length_m else None
+        if elsewhere is not None:
+            print(
+                f"nothing recorded on this layout of {track} "
+                f"({length_m / 1000:.3f} km). There are laps under that name - "
+                f"{elsewhere.path.name} is one - but on a course of a "
+                f"different length, so measuring against it would compare two "
+                f"different tracks. Drive a lap on this one, or name a lap "
+                f"with --reference.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"nothing recorded at {track} yet, so there is nothing to "
+                f"measure against. Drive a lap with the game's own telemetry "
+                f"logging on, or name a lap from elsewhere with --reference.",
+                file=sys.stderr,
+            )
     return found
 
 
@@ -283,15 +303,25 @@ def _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap) -> None:
         for finding in watch.advance(buffer):
             corner = finding.comparison.corner
             tip = finding.to_say
-            note = ""
-            if tip is None and finding.advice is not None:
-                note = f"  (same braking as an earlier corner)"
+            # Advice first, then praise, then nothing. A corner with something
+            # to change has a sentence worth more than a compliment; a corner
+            # that went well should hear so rather than be met with silence,
+            # which reads as "nothing was measured here".
+            if tip is not None:
+                said = tip.headline
+            elif finding.praise is not None:
+                said = finding.praise
+            elif finding.advice is not None:
+                said = "- (same braking as an earlier corner)"
+            else:
+                said = "-"
             print(
-                f"  {corner.name:28s} {finding.comparison.lost_s:+.3f} s  "
-                f"{tip.headline if tip else '-'}{note}"
+                f"  {corner.name:28s} {finding.comparison.lost_s:+.3f} s  {said}"
             )
             if overlay is not None:
-                overlay.show_finding(corner.name, tip.headline if tip else None)
+                overlay.show_finding(
+                    corner.name, tip.headline if tip else finding.praise
+                )
 
         # Paced on the wall clock, not on lap time: lap time restarts at every
         # line, and a replay running at 40x would redraw 40 times as often as

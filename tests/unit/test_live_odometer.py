@@ -94,3 +94,68 @@ def test_a_stationary_car_stays_where_it_is():
     odo = Odometer()
     odo.advance(100.0, 3, 0.0, 900.0)
     assert odo.advance(100.0, 3, 0.0, 901.0) == pytest.approx(100.0)
+
+
+# -- crossing the line -----------------------------------------------------
+#
+# Scoring is written at about 5 Hz and the lap counter is read from telemetry
+# at about 50 Hz, so for up to 200 ms after the line the lap number has
+# advanced while mLapDist still carries the previous lap's distance. Both of
+# the following were seen live: three laps driven, findings for the first and
+# silence for every one after it.
+
+
+def test_a_lap_that_ticks_over_before_scoring_does_reports_nothing_yet():
+    """Rather than reporting the previous lap's distance under the new lap.
+
+    Latched as the new lap's starting point, 5770 m means every corner is
+    already behind the car and the whole lap is passed over in silence.
+    """
+    odometer = Odometer()
+    assert odometer.advance(5700.0, 1, 60.0, 1.0) == pytest.approx(5700.0)
+
+    # The line. Lap 2, but scoring has not caught up.
+    assert odometer.advance(5770.0, 2, 60.0, 1.2) is None
+    assert odometer.advance(5775.0, 2, 60.0, 1.4) is None
+
+
+def test_the_new_lap_starts_the_moment_scoring_rolls_over():
+    odometer = Odometer()
+    odometer.advance(5700.0, 1, 60.0, 1.0)
+    odometer.advance(5775.0, 2, 60.0, 1.2)
+
+    started = odometer.advance(8.0, 2, 60.0, 1.4)
+    assert started == pytest.approx(8.0), "the lap must begin where scoring says"
+    assert odometer.advance(8.0, 2, 60.0, 1.5) == pytest.approx(8.0 + 60.0 * 0.1)
+
+
+def test_the_odometer_does_not_wedge_after_a_rollover():
+    """It did. A drop from 5775 m to 8 m was read as an implausible jump, so
+    every frame afterwards was refused - for the rest of the session."""
+    odometer = Odometer()
+    odometer.advance(5700.0, 1, 60.0, 1.0)
+    odometer.advance(5775.0, 2, 60.0, 1.2)
+    odometer.advance(8.0, 2, 60.0, 1.4)
+
+    # 60 m/s with scoring 0.2 s apart is 12 m a step. Anything bigger is not a
+    # car, and the plausibility check is right to refuse it.
+    for at, (distance, elapsed) in enumerate(
+        [(8.0, 1.6), (20.0, 1.8), (32.0, 2.0), (44.0, 2.2)]
+    ):
+        got = odometer.advance(distance, 2, 60.0, elapsed)
+        assert got is not None, f"refused frame {at} after the line"
+        assert got > 0.0
+
+
+def test_a_forward_jump_is_still_refused():
+    """The rollover rule must not become a way in for torn reads. Backwards is
+    the line; forwards by more than a car can travel is a bad read."""
+    odometer = Odometer()
+    odometer.advance(1000.0, 1, 60.0, 1.0)
+    assert odometer.advance(4000.0, 1, 60.0, 1.1) is None
+
+
+def test_the_very_first_frame_of_a_session_still_anchors():
+    """There is no previous distance to roll over from."""
+    odometer = Odometer()
+    assert odometer.advance(119.7, 0, 0.0, 86.7) == pytest.approx(119.7)
