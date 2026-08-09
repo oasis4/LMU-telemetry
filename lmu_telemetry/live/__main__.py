@@ -105,8 +105,14 @@ def _await_reference(live, recordings: Path, patience_s: float = 120.0):
     # Monza" is systematically the short variant - it is quicker for being
     # shorter - and every delta is measured against a different track.
     length_m = live.track_length_m() if hasattr(live, "track_length_m") else None
+    # The class as well. A Hypercar reference under a GT3 driver is nine
+    # seconds a lap and every corner reads as a disaster - the same shape of
+    # fault as the layout: "the quickest lap here" is the quickest *car*.
+    # Read after the circuit, because it only answers once a car exists.
+    car_class = live.car_class() if hasattr(live, "car_class") else None
     print(f"circuit:   {track}"
-          + (f", {length_m / 1000:.3f} km" if length_m else ""))
+          + (f", {length_m / 1000:.3f} km" if length_m else "")
+          + (f"   class: {car_class}" if car_class else ""))
     if not recordings.is_dir():
         print(
             f"no recordings directory at {recordings}. Point --recordings at "
@@ -115,12 +121,32 @@ def _await_reference(live, recordings: Path, patience_s: float = 120.0):
         )
         return None
 
-    found = find_reference(recordings, track, length_m=length_m)
+    found = find_reference(
+        recordings, track, length_m=length_m, car_class=car_class
+    )
     if found is None:
         # Said apart, because they lead to different next moves: drive a lap
-        # here, against you have laps here but on the other layout.
+        # here, against you have laps here but in the other car or on the
+        # other layout.
+        other_class = (
+            find_reference(recordings, track, length_m=length_m)
+            if car_class else None
+        )
         elsewhere = find_reference(recordings, track) if length_m else None
-        if elsewhere is not None:
+        if other_class is not None:
+            with Session.open(other_class.path) as session:
+                theirs = session.info.car_class
+            print(
+                f"nothing recorded here in {car_class}. There are laps on this "
+                f"course in {theirs} - {other_class.path.name} is one - but a "
+                f"reference from another class is worse than none: a Hypercar "
+                f"lap at Monza is nine seconds under a GT3 one, and every "
+                f"corner would report you hopelessly off a target this car "
+                f"cannot reach. Drive a lap in this class, or name one with "
+                f"--reference.",
+                file=sys.stderr,
+            )
+        elif elsewhere is not None:
             print(
                 f"nothing recorded on this layout of {track} "
                 f"({length_m / 1000:.3f} km). There are laps under that name - "

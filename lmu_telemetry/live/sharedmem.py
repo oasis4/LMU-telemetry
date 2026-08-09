@@ -636,6 +636,29 @@ class LiveTelemetry:
         """
         return float(self._read().scoring.scoringInfo.mLapDist)
 
+    def car_class(self) -> str:
+        """The class the player's car is in, or "" if there is no car yet.
+
+        A reference from another class is worse than none: a Hypercar lap at
+        Monza is nine seconds under a GT3 one, and every corner would report
+        the driver hopelessly off a target no GT3 can reach. It is the same
+        self-reinforcing shape as the layout fault - "the quickest lap here"
+        picks the quickest *car*, whatever is being driven.
+
+        Taken from scoring so it answers from the garage, like the track name.
+        """
+        state = self._read()
+        if not state.telemetry.playerHasVehicle:
+            # Nothing is driving yet. Scoring still knows the field, but which
+            # entry is the player is only answerable through telemetry.
+            return ""
+        car = state.telemetry.telemInfo[state.telemetry.playerVehicleIdx]
+        entry = self._player_scoring(state, car.mID)
+        if entry is None:
+            return ""
+        raw = entry.mVehicleClass
+        return raw.decode("utf-8", "replace").strip() if raw else ""
+
     def sample(self) -> "tuple[LiveSample, int] | None":
         """One instant of the player's car and its lap number, or None.
 

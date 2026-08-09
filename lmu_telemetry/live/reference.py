@@ -82,6 +82,23 @@ def same_track(a: str, b: str) -> bool:
     return left == right or left in right or right in left
 
 
+def same_class(recorded: str, driven: str) -> bool:
+    """Whether two class names denote the same machinery.
+
+    Loose in the same way and for the same reason as :func:`same_track`: the
+    game and the recordings both name the class but come from different places
+    in one product, so "GT3" and "LMGT3" are one class.
+
+    Either being unknown is a yes - a recording that never stated its class is
+    not evidence of a different one. A stated class that matches nothing is
+    not: that is the Hypercar case, and it is worth nine seconds a lap.
+    """
+    if not recorded or not driven:
+        return True
+    left, right = normalise(recorded), normalise(driven)
+    return left == right or left in right or right in left
+
+
 def same_layout(recorded_m: "float | None", loaded_m: "float | None") -> bool:
     """Whether two measured lengths are the same layout of a circuit.
 
@@ -95,7 +112,10 @@ def same_layout(recorded_m: "float | None", loaded_m: "float | None") -> bool:
 
 
 def find_reference(
-    recordings: Path, track: str, length_m: "float | None" = None
+    recordings: Path,
+    track: str,
+    length_m: "float | None" = None,
+    car_class: "str | None" = None,
 ) -> "Reference | None":
     """The quickest clean lap recorded on *track*, or None if there is none.
 
@@ -116,6 +136,8 @@ def find_reference(
                 if not same_track(session.info.track, track):
                     continue
                 if not same_layout(session.track_length_m, length_m):
+                    continue
+                if not same_class(session.info.car_class, car_class):
                     continue
                 for lap in clean_laps(session):
                     if lap.duration_s is None:

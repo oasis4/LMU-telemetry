@@ -219,3 +219,59 @@ def test_a_length_inside_the_tolerance_is_accepted(fixture_dir):
     assert find_reference(
         fixture_dir, MONZA, length_m=recorded + LAYOUT_TOLERANCE_M + 1
     ) is None
+
+
+# -- telling one class from another ----------------------------------------
+#
+# Found the same way the layout bug was: the reference chosen live was a
+# Hypercar while the driver was in a GT3. Nine seconds a lap apart, and every
+# corner would have reported the driver miles off their own reference.
+#
+# It is the same self-reinforcing shape as the layout fault. "The quickest
+# clean lap here" picks the quickest *car*, every time, whatever is driving.
+
+
+def test_a_faster_class_is_not_offered_to_a_slower_one(fixture_dir):
+    """monza_r_position_jump is a Hypercar on the full Monza course; the other
+    full-course Monza fixtures are GT3. Same circuit, same layout."""
+    from lmu_telemetry.live.reference import find_reference
+
+    found = find_reference(fixture_dir, MONZA, length_m=5776.0, car_class="GT3")
+    assert found is not None
+    with Session.open(found.path) as session:
+        assert session.info.car_class == "GT3"
+
+
+def test_the_class_that_was_asked_for_is_the_class_that_comes_back(fixture_dir):
+    from lmu_telemetry.live.reference import find_reference
+
+    found = find_reference(fixture_dir, MONZA, length_m=5776.0, car_class="Hyper")
+    assert found is not None
+    with Session.open(found.path) as session:
+        assert session.info.car_class == "Hyper"
+
+
+def test_a_class_with_nothing_recorded_finds_nothing(fixture_dir):
+    """Better none than one that is nine seconds a lap away."""
+    from lmu_telemetry.live.reference import find_reference
+
+    assert find_reference(
+        fixture_dir, MONZA, length_m=5776.0, car_class="LMP2"
+    ) is None
+
+
+def test_the_class_is_matched_loosely_like_the_track_name(fixture_dir):
+    """The game and the recordings both name the class but come from
+    different places in one product, so LMGT3 and GT3 are one class."""
+    from lmu_telemetry.live.reference import find_reference
+
+    for asked in ("GT3", "gt3", "LMGT3"):
+        found = find_reference(fixture_dir, MONZA, length_m=5776.0, car_class=asked)
+        assert found is not None, asked
+
+
+def test_omitting_the_class_changes_nothing(fixture_dir):
+    """A replay, or a game that will not say, gets the old behaviour."""
+    from lmu_telemetry.live.reference import find_reference
+
+    assert find_reference(fixture_dir, MONZA, length_m=5776.0) is not None
