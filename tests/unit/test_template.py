@@ -1,0 +1,104 @@
+"""The window a braking template is drawn over.
+
+Everything here works in offsets into that window rather than in lap
+distances. A window crossing the start/finish line is two ranges in lap
+distance, and every consumer would have to know it; as an offset it is one
+range that starts at zero.
+"""
+
+import numpy as np
+import pytest
+
+from lmu_telemetry.core.metrics import APPROACH_M
+from lmu_telemetry.core.session import Session
+from lmu_telemetry.core.track_model import build_track_model
+from lmu_telemetry.core.trace import build_trace
+from lmu_telemetry.live.template import Template, offset_into, templates_for
+
+
+def test_an_offset_is_measured_forward_from_the_window_start():
+    assert offset_into(700.0, 900.0, 5800.0) == pytest.approx(200.0)
+    assert offset_into(700.0, 700.0, 5800.0) == pytest.approx(0.0)
+
+
+def test_an_offset_wraps_the_start_finish_line():
+    """A window from 5700 m to 100 m is 200 m long, not minus 5600."""
+    assert offset_into(5700.0, 5750.0, 5800.0) == pytest.approx(50.0)
+    assert offset_into(5700.0, 50.0, 5800.0) == pytest.approx(150.0)
+
+
+@pytest.fixture(scope="module")
+def monza(monza_q_file):
+    with Session.open(monza_q_file) as session:
+        model = build_track_model([session])
+        laps = {lap.number: lap for lap in session.laps}
+        trace = build_trace(session, laps[2], model.track_length_m)
+    return model, trace
+
+
+def test_a_template_is_made_for_every_corner_the_reference_braked_for(monza):
+    model, trace = monza
+    made = templates_for(trace, model.corners)
+    assert made, "no templates at all"
+    assert len(made) <= len(model.corners)
+    for one in made:
+        assert one.brake_at_m is not None
+
+
+def test_a_corner_taken_flat_gets_no_template(monza):
+    """It has nothing to teach here, and it would put a strip on the screen
+    with no mark on it."""
+    from lmu_telemetry.core.metrics import corner_metrics
+
+    model, trace = monza
+    made = {one.corner.index for one in templates_for(trace, model.corners)}
+    for corner in model.corners:
+        if corner_metrics(trace, corner).brake_point_m is None:
+            assert corner.index not in made
+
+
+def test_the_window_reaches_back_the_approach_distance(monza):
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        span = one.corner.end_m - one.corner.start_m
+        if span < 0:
+            span += trace.grid[-1]
+        assert one.length_m == pytest.approx(APPROACH_M + span, abs=4.0)
+
+
+def test_the_brake_mark_sits_inside_the_window(monza):
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        assert 0.0 <= one.brake_at_m <= one.length_m, one.corner.name
+        assert 0.0 <= one.entry_at_m <= one.length_m
+
+
+def test_the_traces_are_as_long_as_the_offsets(monza):
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        assert len(one.offsets_m) == len(one.brake) == len(one.throttle)
+        assert len(one.abs_m) == len(one.offsets_m)
+        assert one.offsets_m[0] == pytest.approx(0.0)
+
+
+def test_the_offsets_only_ever_increase(monza):
+    """Which is the property that makes a wrapping window one range."""
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        assert np.all(np.diff(one.offsets_m) > 0), one.corner.name
+
+
+def test_the_pedal_traces_stay_inside_their_scale(monza):
+    """The strip is drawn on a fixed 0..1 axis and must not run off it."""
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        assert one.brake.min() >= -0.01 and one.brake.max() <= 1.01
+        assert one.throttle.min() >= -0.01 and one.throttle.max() <= 1.01
+
+
+def test_the_reference_entry_speed_is_carried(monza):
+    """So the strip can say how much slower the driver arrived, which is the
+    one thing about the grey line that is not simply true today."""
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        assert one.entry_speed_kmh > 0.0
