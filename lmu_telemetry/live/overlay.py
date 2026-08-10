@@ -64,6 +64,15 @@ POSITIONS = (
     "bottom-center", "bottom-left", "bottom-right",
 )
 
+#: Height of one pedal strip at the design scale, and the gap between the two.
+_STRIP_H = 34.0
+_STRIP_GAP = 6.0
+#: The reference, and the driver's own lines over it.
+GHOST = "#4a4a58"
+OWN_BRAKE = "#ff6b52"
+OWN_THROTTLE = "#43d08a"
+MARK = "#8a8aa0"
+
 #: The design was drawn against a 1080-high screen; everything scales from it.
 _BASE_HEIGHT = 1080.0
 #: Panel width as a share of screen width, and the range it may take. The cap
@@ -167,6 +176,19 @@ class Overlay:
         )
         self._tip_pad = (max(2, int(4 * k)), 0)
 
+        self._strip_h = max(18, int(_STRIP_H * k))
+        self._strip_gap = max(3, int(_STRIP_GAP * k))
+        self.strips = tk.Canvas(
+            card, bg=CARD, highlightthickness=0, bd=0,
+            width=text_width, height=2 * self._strip_h + self._strip_gap,
+        )
+        self.entry = tk.Label(
+            card, text="", font=("Segoe UI", max(8, int(11 * k))),
+            fg=MUTED, bg=CARD, anchor="w",
+        )
+        self._strip_width = text_width
+        self._template_up = False
+
         self._position = position
         self._width = width
         self._margin = int(28 * k) if margin_px is None else margin_px
@@ -190,6 +212,31 @@ class Overlay:
             self._position, self._monitor, self._width, height, self._margin
         )
         self.root.geometry(f"{self._width}x{height}+{x}+{y}")
+
+    @staticmethod
+    def _strip_points(offsets_m, values, length_m, width, top, height):
+        """One polyline, flattened to x1, y1, x2, y2, ... for tkinter.
+
+        The x axis is the window in metres and nothing else. That is what puts
+        the grey line and the driver's line on the same metres, which is the
+        only reason the strip is worth looking at.
+
+        The y axis is fixed 0..1 and clamped. Scaled to the data instead, a
+        60 % brake application and a 90 % one would be drawn at the same
+        height, and the template would be pretty and wrong.
+        """
+        if length_m <= 0 or len(offsets_m) == 0:
+            return [0.0, float(top + height), float(width), float(top + height)]
+        flat: "list[float]" = []
+        for offset, value in zip(offsets_m, values):
+            x = float(offset) / float(length_m) * float(width)
+            clamped = min(1.0, max(0.0, float(value)))
+            flat.extend([x, float(top) + (1.0 - clamped) * float(height)])
+        if len(flat) == 2:
+            # tkinter will not draw a line with one point, and the driver has
+            # exactly one sample on the first frame of every window.
+            flat = flat + [flat[0] + 0.5, flat[1]]
+        return flat
 
     @staticmethod
     def _place(position, monitor, width, height, margin):
@@ -245,6 +292,70 @@ class Overlay:
         self.corner.pack_forget()
         self.sentence.pack_forget()
         self._expires_at = 0.0
+        self._relayout()
+
+    def show_template(self, showing, own_brake, own_throttle,
+                      entry_delta_kmh=None) -> None:
+        """The reference's pedals for this corner, with the driver's over them.
+
+        Drawn from scratch each frame rather than moved: the driver's line
+        grows by a point or two per frame and the reference does not change,
+        and a canvas of a few hundred segments redraws far inside the 15 Hz
+        this is called at.
+        """
+        template = showing.template
+        width, height = self._strip_width, self._strip_h
+        gap = self._strip_gap
+        self.strips.delete("all")
+
+        for top, values, own, colour in (
+            (0, template.brake, own_brake, OWN_BRAKE),
+            (height + gap, template.throttle, own_throttle, OWN_THROTTLE),
+        ):
+            self.strips.create_line(
+                *self._strip_points(template.offsets_m, values,
+                                    template.length_m, width, top, height),
+                fill=GHOST, width=max(2, int(height / 12)),
+            )
+            if len(own):
+                self.strips.create_line(
+                    *self._strip_points(template.offsets_m[:len(own)], own,
+                                        template.length_m, width, top, height),
+                    fill=colour, width=max(2, int(height / 10)),
+                )
+
+        mark = template.brake_at_m / template.length_m * width
+        self.strips.create_line(
+            mark, 0, mark, 2 * height + gap, fill=MARK, dash=(3, 3),
+        )
+        here = showing.at_m / template.length_m * width
+        self.strips.create_line(
+            here, 0, here, 2 * height + gap, fill=INK,
+        )
+
+        if entry_delta_kmh is None:
+            self.entry.configure(text=template.corner.name.upper())
+        else:
+            # Shown, never corrected for. A car arriving slower may brake
+            # later, but turning that into a moved mark would be a braking
+            # model, and the number would look measured when it was invented.
+            self.entry.configure(
+                text=f"{template.corner.name.upper()}   "
+                     f"{entry_delta_kmh:+.0f} km/h in"
+            )
+
+        if not self._template_up:
+            self.entry.pack(anchor="w", pady=self._tip_pad)
+            self.strips.pack(anchor="w", fill="x")
+            self._template_up = True
+            self._relayout()
+
+    def hide_template(self) -> None:
+        if not self._template_up:
+            return
+        self.strips.pack_forget()
+        self.entry.pack_forget()
+        self._template_up = False
         self._relayout()
 
     def pump(self) -> None:
