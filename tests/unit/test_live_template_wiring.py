@@ -157,17 +157,101 @@ def test_a_why_silent_lap_neither_draws_nor_sounds(monkeypatch):
 
     sounded = []
     monkeypatch.setattr(live_main, "play_brake_tone", lambda: sounded.append(True))
-    _sound_if_due(templates, watch, sample)
+    _sound_if_due(templates, buffer, watch, sample)
     assert sounded == [], "a silenced lap must not sound the tone either"
 
     # Prove the guard, not a coincidence, suppressed it: since why_silent
-    # short-circuits before templates.tone_due is even called, the corner is
-    # still armed underneath. Clearing the silence and asking again should
-    # sound it - if it does not, the first call already consumed it and the
-    # assertion above was not testing what it claimed to.
+    # short-circuits before the tone is committed, the corner is still armed
+    # underneath. Clearing the silence and asking again should sound it - if
+    # it does not, the first call already consumed it and the assertion
+    # above was not testing what it claimed to.
     watch.why_silent = None
-    _sound_if_due(templates, watch, sample)
+    _sound_if_due(templates, buffer, watch, sample)
     assert sounded == [True], "the same brake point should still be armed once the lap is usable"
+
+
+def test_a_window_that_was_never_watched_does_not_sound_either(monkeypatch):
+    """_show_template already hides the strip for a window whose approach
+    began before buffer.started_m - the tone must agree, not sound for a
+    window whose strip is correctly withheld."""
+    template, templates, buffer, watch, _overlay = _rig()
+
+    # Same setup as test_a_window_opened_before_started_m_is_not_drawn: the
+    # overlay attached mid-approach, past the brake mark.
+    sample = _feed(
+        buffer, np.arange(template.corner.start_m, template.corner.start_m + 100.0, 2.0)
+    )
+    assert not live_main._window_was_watched(template, buffer), "test setup is wrong"
+
+    sounded = []
+    monkeypatch.setattr(live_main, "play_brake_tone", lambda: sounded.append(True))
+    _sound_if_due(templates, buffer, watch, sample)
+    assert sounded == [], "a window whose strip is hidden must not sound its tone"
+
+    # Prove it is still armed, not consumed: a fresh lap that does watch the
+    # window from its own start should still sound the same brake point.
+    templates.reset()
+    fresh_buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+    fresh_sample = _feed(
+        fresh_buffer,
+        np.arange(template.start_m, template.start_m + template.brake_at_m + 10.0, 2.0),
+    )
+    _sound_if_due(templates, fresh_buffer, watch, fresh_sample)
+    assert sounded == [True], "the same brake point should still be armed next lap"
+
+
+# -- the pit-lane race --------------------------------------------------------
+
+
+class _FakeCornerWatch:
+    """Stands in for CornerWatch inside _drive: only reset(), why_silent,
+    mark_unusable() and advance() are called on it there, and none of them
+    need real corner measurement for this test."""
+
+    def __init__(self) -> None:
+        self.why_silent: "str | None" = None
+
+    def reset(self) -> None:
+        self.why_silent = None
+
+    def mark_unusable(self, because: str) -> None:
+        if self.why_silent is None:
+            self.why_silent = because
+
+    def advance(self, buffer) -> list:
+        return []
+
+
+def test_the_pit_lane_gate_is_set_before_the_tone_can_fire(monkeypatch):
+    """The race this closes: on the single sample that first reports
+    in_pits, watch.why_silent must already be set by the time
+    _sound_if_due looks at it - not on the frame after."""
+    template = _template_at()
+    templates = TemplateWatch([template], LAP)
+    buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+    watch = _FakeCornerWatch()
+
+    sounded = []
+    monkeypatch.setattr(live_main, "play_brake_tone", lambda: sounded.append(True))
+
+    # First sample: on track, at the window's own start, so the window is
+    # watched from its own start and only the pit-lane gate is left to
+    # prove. Second: past the brake mark, and the first sample this lap to
+    # report in_pits - the exact frame the race was about.
+    on_track = LiveSample(
+        distance_m=template.start_m, time_s=0.0, speed_kmh=200.0,
+        throttle=0.0, brake=0.0, steering=0.0, in_pits=False,
+    )
+    into_the_pits = LiveSample(
+        distance_m=template.start_m + template.brake_at_m + 10.0, time_s=1.0,
+        speed_kmh=80.0, throttle=0.0, brake=0.3, steering=0.0, in_pits=True,
+    )
+    source = [(on_track, 1), (into_the_pits, 1)]
+
+    live_main._drive(source, buffer, watch, templates, None, None, 0.0, None)
+
+    assert watch.why_silent is not None, "test setup is wrong"
+    assert sounded == [], "the first in-pits sample must not sound the tone"
 
 
 # -- windows opened before the buffer was watching ---------------------------

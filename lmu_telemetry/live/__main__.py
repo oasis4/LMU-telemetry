@@ -335,16 +335,21 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
             watch.reset()
             templates.reset()
         buffer.add(sample)
-        _sound_if_due(templates, watch, sample)
 
         # An out lap or an in lap is not a lap. Said once, when it is first
         # known, so the quiet that follows has a reason attached rather than
-        # looking like the tool having stopped.
+        # looking like the tool having stopped. Done before _sound_if_due,
+        # not after: on the single sample that first reports in_pits,
+        # why_silent would otherwise still read None when the tone check
+        # runs, and a lap that just left the racing line for the pit
+        # entry would still get one last beep.
         if sample.in_pits and watch.why_silent is None:
             watch.mark_unusable("this lap used the pit lane")
             print("  -- pit lane: this lap is not being measured --")
             if overlay is not None:
                 overlay.show_finding("", "out lap - not measured")
+
+        _sound_if_due(templates, buffer, watch, sample)
 
         for finding in watch.advance(buffer):
             corner = finding.comparison.corner
@@ -452,19 +457,34 @@ def _show_template(overlay, templates, buffer, watch, sample, now) -> None:
     overlay.show_template(showing, own_brake, own_throttle, entry_delta)
 
 
-def _sound_if_due(templates, watch, sample) -> None:
-    """Sound the brake mark, unless this lap is not being watched.
+def _sound_if_due(templates, buffer, watch, sample) -> None:
+    """Sound the brake mark, unless this lap or this window is not watched.
 
-    ``_show_template`` already withholds the strip on a pit-lane lap; without
-    the same gate here the tone would still fire on its own, inviting the
-    driver to match a qualifying brake point on cold tyres out of the pits -
-    which the strip's own guard exists to avoid, and a beep with no strip on
-    screen would be stranger still.
+    Two silences, both mirrored from the guards ``_show_template`` already
+    applies to the strip - so the two can never tell different stories about
+    the same window: the whole lap, by ``watch.why_silent`` (a pit-lane lap
+    beeping for a strip it is not showing would be stranger still than the
+    strip alone being withheld), and this one window's approach, by
+    ``_window_was_watched`` (a window whose opening metres were never
+    recorded is exactly the case the strip already hides for, and the tone
+    is a claim about the same metres).
+
+    Uses ``templates.due_template``/``.mark_toned`` rather than
+    ``.tone_due`` directly, so a window that is due but fails either guard
+    is left un-toned rather than marked and silently dropped - it stays
+    armed for the rest of this lap, which never matters (both guards, once
+    true, stay true for the whole lap), but it means "armed" keeps meaning
+    one thing.
     """
+    template = templates.due_template(sample.distance_m)
+    if template is None:
+        return
     if watch.why_silent is not None:
         return
-    if templates.tone_due(sample.distance_m):
-        play_brake_tone()
+    if not _window_was_watched(template, buffer):
+        return
+    templates.mark_toned(template)
+    play_brake_tone()
 
 
 if __name__ == "__main__":

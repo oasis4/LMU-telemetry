@@ -187,7 +187,21 @@ class Overlay:
             fg=MUTED, bg=CARD, anchor="w",
         )
         self._strip_width = text_width
-        self._template_up = False
+
+        # Which optional group is on screen below the delta - "template",
+        # "finding", or None for neither. Never both: see _widget_order and
+        # _set_content.
+        self._content: "str | None" = None
+        self._widgets = {
+            "delta": self.delta, "entry": self.entry, "strips": self.strips,
+            "corner": self.corner, "sentence": self.sentence,
+        }
+        self._pack_opts = {
+            "entry": {"anchor": "w", "pady": self._tip_pad},
+            "strips": {"anchor": "w", "fill": "x"},
+            "corner": {"anchor": "w", "pady": self._tip_pad},
+            "sentence": {"anchor": "w", "fill": "x"},
+        }
 
         self._position = position
         self._width = width
@@ -268,6 +282,60 @@ class Overlay:
         self.delta.configure(text=f"{seconds:+.3f}", fg=colour)
         self.rail.configure(bg=colour)
 
+    @staticmethod
+    def _widget_order(content: "str | None") -> "tuple[str, ...]":
+        """Which widgets are visible, and in what order, for one content state.
+
+        ``content`` is ``"template"``, ``"finding"``, or ``None`` for
+        neither. ``delta`` always leads; at most one of the template pair
+        (``entry``, ``strips``) or the finding pair (``corner``,
+        ``sentence``) follows it, never both. That is the whole fix: the
+        panel's vertical order used to depend on whichever of
+        ``show_template`` and ``show_finding`` had most recently packed its
+        widgets, so it flipped corner to corner - a driver reported it as
+        the panel growing, shrinking and shifting, steady only in the short
+        stretch right before a corner. A pure function of the *current*
+        state alone has nothing for "which happened first" to act on.
+
+        Static, and returning names rather than touching a widget, for the
+        same reason ``_strip_points`` and ``_place`` are static: there is no
+        display in the environment these are tested in, so this is what
+        stands in for constructing an ``Overlay``. ``_set_content`` is the
+        only place this is read for real, so the pack order actually drawn
+        and the order tested here cannot drift apart.
+        """
+        if content == "template":
+            return ("delta", "entry", "strips")
+        if content == "finding":
+            return ("delta", "corner", "sentence")
+        return ("delta",)
+
+    def _set_content(self, content: "str | None") -> bool:
+        """Make *content* the one optional group shown below the delta.
+
+        Packs and forgets whatever ``_widget_order`` says changed, each
+        newly-shown widget positioned with ``after=`` the one before it in
+        that fixed order - never a bare ``pack()``, whose slot depends on
+        call order rather than on what is actually being shown. Returns
+        whether anything actually changed, so a caller redrawing the same
+        content every frame (``show_template``, at 15 Hz while a template is
+        up) knows not to relayout for it.
+        """
+        if content == self._content:
+            return False
+        wanted = self._widget_order(content)
+        for name in reversed(self._widget_order(self._content)):
+            if name != "delta" and name not in wanted:
+                self._widgets[name].pack_forget()
+        if self._content == "finding" and content != "finding":
+            self._expires_at = 0.0
+        self._content = content
+        previous = self._widgets["delta"]
+        for name in wanted[1:]:
+            self._widgets[name].pack(after=previous, **self._pack_opts[name])
+            previous = self._widgets[name]
+        return True
+
     def show_finding(self, name: str, sentence: str | None) -> None:
         """A corner just completed.
 
@@ -276,22 +344,26 @@ class Overlay:
         line. Silence is the post-lap view's answer too, and a driver glancing
         at a name with no advice under it would read it as a tip that failed to
         arrive.
+
+        A finding always wins the content slot, even over a template that is
+        currently up: the two are never shown together, and the corner that
+        just finished is the more urgent of the two to say something about.
+        Always relayouts, transition or not - the sentence's own text changes
+        corner to corner, and a longer or shorter one can wrap onto a
+        different number of lines even while the slot itself stays "finding".
         """
         if not sentence:
             return self._clear()
         self.corner.configure(text=name.upper())
         self.sentence.configure(text=sentence)
-        self.corner.pack(anchor="w", pady=self._tip_pad)
-        self.sentence.pack(anchor="w", fill="x")
         self._expires_at = time.monotonic() + SENTENCE_SECONDS
+        self._set_content("finding")
         self._relayout()
 
     def _clear(self) -> None:
-        if not self._expires_at:
-            return                      # already just the delta; nothing to do
-        self.corner.pack_forget()
-        self.sentence.pack_forget()
-        self._expires_at = 0.0
+        if self._content != "finding":
+            return                      # not ours to take down
+        self._set_content(None)
         self._relayout()
 
     def show_template(self, showing, own_brake, own_throttle,
@@ -302,6 +374,13 @@ class Overlay:
         grows by a point or two per frame and the reference does not change,
         and a canvas of a few hundred segments redraws far inside the 15 Hz
         this is called at.
+
+        A template always wins the content slot, even over a sentence that
+        is currently up: the two are never shown together. Relayouts only on
+        the actual transition into showing - the canvas and the entry label
+        are both fixed height once up, so redrawing their content here every
+        frame does not need a new one, and relayouting every frame is
+        exactly the jitter this was written to remove.
         """
         template = showing.template
         width, height = self._strip_width, self._strip_h
@@ -344,18 +423,13 @@ class Overlay:
                      f"{entry_delta_kmh:+.0f} km/h in"
             )
 
-        if not self._template_up:
-            self.entry.pack(anchor="w", pady=self._tip_pad)
-            self.strips.pack(anchor="w", fill="x")
-            self._template_up = True
+        if self._set_content("template"):
             self._relayout()
 
     def hide_template(self) -> None:
-        if not self._template_up:
-            return
-        self.strips.pack_forget()
-        self.entry.pack_forget()
-        self._template_up = False
+        if self._content != "template":
+            return                      # not ours to take down
+        self._set_content(None)
         self._relayout()
 
     def pump(self) -> None:

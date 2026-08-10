@@ -200,15 +200,39 @@ class TemplateWatch:
                 held_last, held = last, Showing(template, template.length_m, past_corner=True)
         return held
 
-    def tone_due(self, distance_m: float) -> bool:
-        """True exactly once per corner, as the reference brake point passes."""
+    def due_template(self, distance_m: float) -> "Template | None":
+        """The template whose brake mark has just been passed, if any.
+
+        Split out from :meth:`tone_due` so a caller can decide *not* to sound
+        it - the overlay withholds the tone for a window it never watched
+        the approach of, the same as it withholds the strip, and it can only
+        make that decision once it knows which template is in question.
+        Finding a template here does not arm it; :meth:`mark_toned` does
+        that separately, once the caller has decided the tone is actually
+        going to sound.
+        """
         for template in self.templates:
             at = self._inside(template, distance_m)
             if at is None or at < template.brake_at_m:
                 continue
-            index = template.corner.index
-            if index in self._toned:
+            if template.corner.index in self._toned:
                 continue
-            self._toned.add(index)
-            return True
-        return False
+            return template
+        return None
+
+    def mark_toned(self, template: "Template") -> None:
+        """Record that *template*'s tone has sounded, so it does not again."""
+        self._toned.add(template.corner.index)
+
+    def tone_due(self, distance_m: float) -> bool:
+        """True exactly once per corner, as the reference brake point passes.
+
+        Built on :meth:`due_template` and :meth:`mark_toned` rather than its
+        own loop, so there is one place that decides which template a
+        distance is due for.
+        """
+        template = self.due_template(distance_m)
+        if template is None:
+            return False
+        self.mark_toned(template)
+        return True
