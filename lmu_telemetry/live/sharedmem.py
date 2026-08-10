@@ -700,6 +700,11 @@ class LiveTelemetry:
                 throttle=float(car.mUnfilteredThrottle),
                 brake=float(car.mUnfilteredBrake),
                 steering=float(car.mUnfilteredSteering),
+                # The garage counts as the pits. A lap that touched either is
+                # an out lap or an in lap, and comparing one against a
+                # qualifying reference complains about a lap nobody was
+                # setting a time on.
+                in_pits=bool(scoring.mInPits) or bool(scoring.mInGarageStall),
             ),
             lap,
         )

@@ -106,6 +106,32 @@ class CornerWatch:
         self._next = 0
         self._reference_metrics: dict[int, CornerMetrics] = {}
         self._braking_named: list[float] = []
+        self._silent_because: str | None = None
+
+    @property
+    def why_silent(self) -> "str | None":
+        """Why this lap is being passed over, or None if it is being watched.
+
+        Kept and published rather than merely acted on. Silence with no reason
+        reads as a broken tool, which is how the out lap came to be reported
+        in the first place: it looked like the only lap that worked.
+        """
+        return self._silent_because
+
+    def mark_unusable(self, because: str) -> None:
+        """This lap is not a lap, and nothing more will be said about it.
+
+        An out lap is a pit exit on cold tyres, and comparing it against a
+        qualifying reference produces a page of complaints about a lap nobody
+        was setting a time on. It is also the first lap of a session, so it is
+        the first impression the panel makes.
+
+        The first reason is kept. What went wrong first is what is worth
+        naming; a lap that left the pits and then also cut the track is still
+        a lap that left the pits.
+        """
+        if self._silent_because is None:
+            self._silent_because = because
 
     def advance(self, buffer: LapBuffer) -> "list[Finding]":
         """Every corner completed since the last call, in the order driven.
@@ -114,6 +140,11 @@ class CornerWatch:
         a replay stepping in metres rather than frames, can pass two corner
         ends in one step, and the second would otherwise be lost.
         """
+        if self._silent_because is not None:
+            # Still stepped past, so the next lap starts at the right corner.
+            self._next = len(self.corners)
+            return []
+
         reached = buffer.reached_m
         if reached is None:
             return []
@@ -189,3 +220,4 @@ class CornerWatch:
         """
         self._next = 0
         self._braking_named.clear()
+        self._silent_because = None

@@ -47,6 +47,11 @@ class LiveSample:
     throttle: float
     brake: float
     steering: float
+    #: Whether the car was in the pit lane or the garage at this instant.
+    #: Carried on the sample rather than asked of the reader, because it is a
+    #: property of the instant - and because the replay path has to be able to
+    #: say it too. Defaults to on-track so a replayed lap needs no change.
+    in_pits: bool = False
 
 
 class LapBuffer:

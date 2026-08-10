@@ -327,3 +327,85 @@ def test_a_suppressed_repeat_does_not_become_praise():
     found = _finding(lost_s=-0.3, advice=item, repeats=True)
     assert found.to_say is None
     assert found.praise is None
+
+
+# -- laps that are not laps ------------------------------------------------
+
+
+def test_a_lap_that_came_out_of_the_pits_is_not_coached(two_laps):
+    """Reported from the PC: the warm-up lap was being coached.
+
+    An out lap is a pit exit, cold tyres and a slow first sector. Compared
+    against a qualifying reference it produces a page of complaints about a
+    lap nobody was setting a time on - and being the first lap, it is also the
+    first impression the tool makes.
+    """
+    model, fast, slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+    buffer = LapBuffer(slow.grid)
+
+    watch.mark_unusable("came out of the pits")
+    for i in range(len(slow.grid)):
+        buffer.add(
+            LiveSample(float(slow.grid[i]), float(slow.time_s[i]),
+                       float(slow.speed_kmh[i]), float(slow.throttle[i]),
+                       float(slow.brake[i]), float(slow.steering[i]))
+        )
+        assert watch.advance(buffer) == [], "a pit lap was coached"
+
+
+def test_the_same_lap_would_otherwise_have_been_coached(two_laps):
+    """So the test above is about the mark and not about the lap."""
+    model, fast, slow = two_laps
+    assert _drive(slow, model.corners, fast), "nothing to suppress"
+
+
+def test_the_next_lap_is_coached_again(two_laps):
+    """The mark is about one lap, not about the session."""
+    model, fast, slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+
+    watch.mark_unusable("came out of the pits")
+    watch.reset()
+    assert watch.why_silent is None
+
+    buffer = LapBuffer(slow.grid)
+    said = []
+    for i in range(len(slow.grid)):
+        buffer.add(
+            LiveSample(float(slow.grid[i]), float(slow.time_s[i]),
+                       float(slow.speed_kmh[i]), float(slow.throttle[i]),
+                       float(slow.brake[i]), float(slow.steering[i]))
+        )
+        said += watch.advance(buffer)
+    assert said, "the lap after a pit lap must be coached"
+
+
+def test_the_reason_is_kept_so_the_silence_can_be_explained(two_laps):
+    """Silence with no reason reads as a broken tool - which is the complaint
+    that started this."""
+    model, fast, _slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+
+    watch.mark_unusable("came out of the pits")
+    assert watch.why_silent == "came out of the pits"
+
+
+def test_marking_twice_keeps_the_first_reason(two_laps):
+    """The first thing that went wrong is the one worth naming."""
+    model, fast, _slow = two_laps
+    watch = CornerWatch(fast, model.corners)
+
+    watch.mark_unusable("came out of the pits")
+    watch.mark_unusable("cut the track")
+    assert watch.why_silent == "came out of the pits"
+
+
+def test_a_sample_says_whether_the_car_was_in_the_pits():
+    """Carried on the sample rather than asked of the reader: it is a property
+    of the instant, and the replay path has to be able to say it too."""
+    ordinary = LiveSample(100.0, 1.0, 200.0, 1.0, 0.0, 0.0)
+    assert ordinary.in_pits is False, "a replayed sample must default to on track"
+
+    pitting = LiveSample(100.0, 1.0, 60.0, 0.2, 0.0, 0.0, in_pits=True)
+    assert pitting.in_pits is True

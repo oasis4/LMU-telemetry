@@ -326,6 +326,15 @@ def _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap) -> None:
             watch.reset()
         buffer.add(sample)
 
+        # An out lap or an in lap is not a lap. Said once, when it is first
+        # known, so the quiet that follows has a reason attached rather than
+        # looking like the tool having stopped.
+        if sample.in_pits and watch.why_silent is None:
+            watch.mark_unusable("this lap used the pit lane")
+            print("  -- pit lane: this lap is not being measured --")
+            if overlay is not None:
+                overlay.show_finding("", "out lap - not measured")
+
         for finding in watch.advance(buffer):
             corner = finding.comparison.corner
             tip = finding.to_say
