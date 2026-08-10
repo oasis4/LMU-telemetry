@@ -144,12 +144,19 @@ class TemplateWatch:
 
         # Outside every window. Hold the one just left, briefly, so the
         # driver can look at whether it fitted once the corner no longer
-        # needs their attention.
+        # needs their attention. Where two held windows overlap, the most
+        # recently left one wins, for the same reason as above: it is the
+        # corner the driver was in last, not whichever happens to come first
+        # in the list.
+        held: "Showing | None" = None
+        held_last = None
         for template in self.templates:
             last = self._last_inside.get(template.corner.index)
-            if last is not None and now - last <= TEMPLATE_HOLD_S:
-                return Showing(template, template.length_m, past_corner=True)
-        return None
+            if last is None or now - last > TEMPLATE_HOLD_S:
+                continue
+            if held_last is None or last > held_last:
+                held_last, held = last, Showing(template, template.length_m, past_corner=True)
+        return held
 
     def tone_due(self, distance_m: float) -> bool:
         """True exactly once per corner, as the reference brake point passes."""

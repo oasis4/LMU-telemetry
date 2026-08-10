@@ -123,10 +123,10 @@ def _one_template():
     )
 
 
-def _corner_at(start_m, end_m):
+def _corner_at(start_m, end_m, index=1):
     from lmu_telemetry.core.corners import Corner
 
-    return Corner(index=1, name="T1", start_m=start_m,
+    return Corner(index=index, name="T1", start_m=start_m,
                   apex_m=(start_m + end_m) / 2, end_m=end_m,
                   radius_m=60.0, heading_deg=90.0, direction="L")
 
@@ -215,3 +215,24 @@ def test_the_nearest_window_wins_when_two_overlap():
     watch = TemplateWatch([first, second], LAP)
     found = watch.showing(1000.0, 0.0)
     assert found.template.corner.start_m == 1150.0
+
+
+def test_the_most_recently_left_window_wins_the_hold():
+    """The same tie-break the inside loop makes, made in the hold loop too.
+    Two overlapping windows can both still be within TEMPLATE_HOLD_S once the
+    car is outside both - the one the driver left last should win, not
+    whichever template happens to come first in the list."""
+    first = _one_template()
+    second = Template(
+        corner=_corner_at(1150.0, 1300.0, index=2), start_m=900.0, length_m=400.0,
+        brake_at_m=100.0, entry_at_m=250.0, entry_speed_kmh=170.0,
+        offsets_m=np.arange(0.0, 401.0, 2.0),
+        abs_m=np.arange(0.0, 401.0, 2.0) + 900.0,
+        brake=np.zeros(201), throttle=np.ones(201),
+    )
+    watch = TemplateWatch([first, second], LAP)
+    watch.showing(800.0, 0.0)      # inside first only
+    watch.showing(1200.0, 0.5)     # inside second only, left after first
+    held = watch.showing(1350.0, TEMPLATE_HOLD_S)   # outside both, both held
+    assert held is not None
+    assert held.template.corner.start_m == 1150.0
