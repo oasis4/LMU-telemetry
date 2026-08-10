@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from ..core.geometry import GRID_STEP_M
+from ..core.metrics import APPROACH_M
 from ..core.session import Session
 from ..core.track_model import build_track_model
 from ..core.trace import build_trace
@@ -334,7 +335,7 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
             watch.reset()
             templates.reset()
         buffer.add(sample)
-        _sound_if_due(templates, sample)
+        _sound_if_due(templates, watch, sample)
 
         # An out lap or an in lap is not a lap. Said once, when it is first
         # known, so the quiet that follows has a reason attached rather than
@@ -382,6 +383,32 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
             overlay.pump()
 
 
+def _window_was_watched(template, buffer) -> bool:
+    """Whether the buffer already held data when this window's approach began.
+
+    Mirrors ``watch.CornerWatch._was_watched``: the overlay can be started
+    while the driver is already on track, and a window whose approach began
+    before ``buffer.started_m`` has nothing recorded for its opening metres.
+    ``np.interp`` would hold the first sample flat *backwards* across that
+    gap, and the grey-versus-coloured comparison - and the entry-speed delta
+    - would be drawn from that one instant rather than from driving.
+
+    Read off the corner's own start and ``APPROACH_M`` rather than
+    ``template.start_m``: the template's start has already been wrapped into
+    ``0..lap_length_m``, and a window that wraps the start/finish line has a
+    true beginning that sits in the *previous* lap - which this buffer,
+    reset every lap, can never have watched, however large
+    ``template.start_m`` looks next to ``buffer.started_m``. Working from the
+    unwrapped ``corner.start_m - APPROACH_M`` instead makes a wrapping window
+    read as never watched, which is the same answer ``_was_watched`` gives a
+    corner in the same position.
+    """
+    started = buffer.started_m
+    if started is None:
+        return False
+    return template.corner.start_m - APPROACH_M >= max(started, 0.0)
+
+
 def _show_template(overlay, templates, buffer, watch, sample, now) -> None:
     """Put the braking template up, or take it down.
 
@@ -395,6 +422,9 @@ def _show_template(overlay, templates, buffer, watch, sample, now) -> None:
         return overlay.hide_template()
 
     template = showing.template
+    if not _window_was_watched(template, buffer):
+        return overlay.hide_template()
+
     try:
         driven = buffer.trace()
     except ValueError:
@@ -422,7 +452,17 @@ def _show_template(overlay, templates, buffer, watch, sample, now) -> None:
     overlay.show_template(showing, own_brake, own_throttle, entry_delta)
 
 
-def _sound_if_due(templates, sample) -> None:
+def _sound_if_due(templates, watch, sample) -> None:
+    """Sound the brake mark, unless this lap is not being watched.
+
+    ``_show_template`` already withholds the strip on a pit-lane lap; without
+    the same gate here the tone would still fire on its own, inviting the
+    driver to match a qualifying brake point on cold tyres out of the pits -
+    which the strip's own guard exists to avoid, and a beep with no strip on
+    screen would be stranger still.
+    """
+    if watch.why_silent is not None:
+        return
     if templates.tone_due(sample.distance_m):
         play_brake_tone()
 

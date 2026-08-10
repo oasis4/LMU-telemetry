@@ -9,7 +9,8 @@ range that starts at zero.
 import numpy as np
 import pytest
 
-from lmu_telemetry.core.metrics import APPROACH_M
+from lmu_telemetry.core.coaching import SAME_BRAKING_M
+from lmu_telemetry.core.metrics import APPROACH_M, corner_metrics
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import build_track_model
 from lmu_telemetry.core.trace import build_trace
@@ -102,6 +103,88 @@ def test_the_reference_entry_speed_is_carried(monza):
     model, trace = monza
     for one in templates_for(trace, model.corners):
         assert one.entry_speed_kmh > 0.0
+
+
+# -- shared braking events ---------------------------------------------------
+
+
+def _expected_groups(model, trace):
+    """Braked corners grouped the way templates_for groups them: consecutive
+    in track order, and within SAME_BRAKING_M of the group's own last point.
+
+    An independent restatement of the merge rule against real data, not a
+    call into templates_for itself - so it is the corner list and the
+    reference's own braking, not the implementation, that decides what the
+    right groups are.
+    """
+    ordered = sorted(model.corners, key=lambda c: c.index)
+    braked = [
+        (c, corner_metrics(trace, c).brake_point_m) for c in ordered
+        if corner_metrics(trace, c).brake_point_m is not None
+    ]
+    groups: "list[list[tuple]]" = []
+    for corner, point in braked:
+        if groups and abs(point - groups[-1][-1][1]) < SAME_BRAKING_M:
+            groups[-1].append((corner, point))
+        else:
+            groups.append([(corner, point)])
+    return [[corner for corner, _point in group] for group in groups]
+
+
+def test_corners_sharing_a_brake_point_are_merged_into_one_template(monza):
+    """Monza's Variante della Roggia and Variante Ascari each brake once in
+    this recording, not once per corner - the live strip must not switch
+    partway through what the driver felt as a single stop."""
+    model, trace = monza
+    groups = _expected_groups(model, trace)
+    runs = [group for group in groups if len(group) > 1]
+    assert runs, (
+        "the fixture no longer has neighbouring corners that share a brake "
+        "point - this test needs a run to mean anything"
+    )
+
+    made = {one.corner.index: one for one in templates_for(trace, model.corners)}
+    for run in runs:
+        head, tail = run[0], run[-1]
+        assert head.index in made, head.name
+        for corner in run[1:]:
+            assert corner.index not in made, (
+                f"{corner.name} should have been folded into {head.name}'s "
+                f"template, not kept as one of its own"
+            )
+        merged = made[head.index]
+        assert merged.corner.end_m == tail.end_m
+        assert merged.corner.name == f"{head.name} - {tail.name}"
+
+
+def test_the_template_count_drops_by_the_corners_folded_into_a_run(monza):
+    """Counting one template per braked corner overcounts by exactly the
+    corners a shared brake point folds into their neighbour."""
+    model, trace = monza
+    groups = _expected_groups(model, trace)
+    made = templates_for(trace, model.corners)
+    assert len(made) == len(groups)
+    braked_corners = sum(len(group) for group in groups)
+    assert len(made) < braked_corners, (
+        "no merging happened at all - this test needs the fixture to have "
+        "at least one shared brake point to say anything about the drop"
+    )
+
+
+def test_a_genuinely_separate_brake_point_keeps_its_own_template(monza):
+    """A corner is not merged into its neighbour just for being next to it -
+    only a brake point within SAME_BRAKING_M does that."""
+    model, trace = monza
+    groups = _expected_groups(model, trace)
+    singles = [group[0] for group in groups if len(group) == 1]
+    assert singles, "need at least one corner with a brake point of its own"
+
+    made = {one.corner.index: one for one in templates_for(trace, model.corners)}
+    for corner in singles:
+        assert corner.index in made, corner.name
+        one = made[corner.index]
+        assert one.corner.name == corner.name
+        assert one.corner.end_m == corner.end_m
 
 
 # -- arming ----------------------------------------------------------------

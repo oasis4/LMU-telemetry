@@ -8,10 +8,11 @@ it. As an offset it is one range that starts at zero and only increases.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
+from ..core.coaching import SAME_BRAKING_M
 from ..core.corners import Corner
 from ..core.geometry import GRID_STEP_M, span_indices
 from ..core.metrics import APPROACH_M, corner_metrics
@@ -44,20 +45,59 @@ class Template:
 
 
 def templates_for(reference: LapTrace, corners) -> "list[Template]":
-    """One template per corner the reference braked for.
+    """One template per braking event the reference used.
 
     A corner taken flat is skipped rather than drawn with no mark on it: it
     has nothing to teach here, and at Monza it would mean eleven strips a lap
     where seven are useful.
+
+    Consecutive corners whose reference brake points fall within
+    ``SAME_BRAKING_M`` of each other are one braking event, not several -
+    the same rule ``live.watch.CornerWatch`` and ``core.coaching.advice``
+    already apply so a chicane is not coached on the same brake application
+    two or three times over. Left ungrouped here, Monza's Roggia and Ascari
+    would each draw more than one strip and sound more than one tone for a
+    stop the driver felt once. The merged template spans from the earliest
+    window's start to the last corner's end, and keeps the earliest brake
+    point and the first corner's entry - it is that first corner's approach
+    that the driver is actually braking for.
     """
     lap_length_m = float(reference.grid[-1]) + GRID_STEP_M
-    made: "list[Template]" = []
+
+    braked: "list[tuple[Corner, CornerMetrics]]" = []
     for corner in corners:
         figures = corner_metrics(reference, corner)
         if figures.brake_point_m is None:
             continue
-        start_m = (corner.start_m - APPROACH_M) % lap_length_m
-        window = span_indices(reference.grid, start_m, corner.end_m)
+        braked.append((corner, figures))
+
+    # Group consecutive braked corners - consecutive in the order driven,
+    # not merely close on the map - that share one brake point. A later
+    # corner is folded into the group open at the time it is reached, so a
+    # run of three (Ascari) merges as readily as a run of two (Roggia).
+    groups: "list[list[tuple[Corner, CornerMetrics]]]" = []
+    for item in braked:
+        if groups and abs(
+            item[1].brake_point_m - groups[-1][-1][1].brake_point_m
+        ) < SAME_BRAKING_M:
+            groups[-1].append(item)
+        else:
+            groups.append([item])
+
+    made: "list[Template]" = []
+    for group in groups:
+        first_corner, first_figures = group[0]
+        last_corner, _last_figures = group[-1]
+        corner = (
+            first_corner if len(group) == 1
+            else replace(
+                first_corner,
+                name=f"{first_corner.name} - {last_corner.name}",
+                end_m=last_corner.end_m,
+            )
+        )
+        start_m = (first_corner.start_m - APPROACH_M) % lap_length_m
+        window = span_indices(reference.grid, start_m, last_corner.end_m)
         if len(window) < 2:
             continue
         abs_m = reference.grid[window]
@@ -68,9 +108,11 @@ def templates_for(reference: LapTrace, corners) -> "list[Template]":
             corner=corner,
             start_m=start_m,
             length_m=float(offsets[-1]),
-            brake_at_m=offset_into(start_m, figures.brake_point_m, lap_length_m),
-            entry_at_m=offset_into(start_m, corner.start_m, lap_length_m),
-            entry_speed_kmh=figures.entry_speed_kmh,
+            brake_at_m=offset_into(
+                start_m, first_figures.brake_point_m, lap_length_m
+            ),
+            entry_at_m=offset_into(start_m, first_corner.start_m, lap_length_m),
+            entry_speed_kmh=first_figures.entry_speed_kmh,
             offsets_m=offsets,
             abs_m=abs_m,
             brake=reference.brake[window],
