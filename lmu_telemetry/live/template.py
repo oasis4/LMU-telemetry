@@ -77,3 +77,89 @@ def templates_for(reference: LapTrace, corners) -> "list[Template]":
             throttle=reference.throttle[window],
         ))
     return made
+
+
+#: How long a template stays up after its corner is behind the car. During the
+#: corner the driver has no attention to spare; afterwards is when they can
+#: look at whether it fitted.
+TEMPLATE_HOLD_S = 1.5
+
+
+@dataclass(frozen=True)
+class Showing:
+    """The template on screen now, and where in it the car is."""
+
+    template: Template
+    at_m: float
+    #: True once the corner is behind the car and this is the hold.
+    past_corner: bool
+
+
+class TemplateWatch:
+    """Which template is up, and whether the tone has fallen due.
+
+    Kept apart from the drawing for the same reason CornerWatch is: this is
+    the part with behaviour in it, and it should answer without a window or a
+    running game.
+    """
+
+    def __init__(self, templates, lap_length_m: float) -> None:
+        self.templates = list(templates)
+        self.lap_length_m = float(lap_length_m)
+        self._toned: set[int] = set()
+        #: Per corner, the last moment the car was seen inside its window.
+        #: The hold is measured from here rather than from the first frame
+        #: after leaving, so it means one thing - "this long since the car was
+        #: in the window" - instead of depending on which frame first noticed.
+        self._last_inside: "dict[int, float]" = {}
+
+    def reset(self) -> None:
+        """A new lap. Every template arms again."""
+        self._toned.clear()
+        self._last_inside.clear()
+
+    def _inside(self, template: Template, distance_m: float) -> "float | None":
+        at = offset_into(template.start_m, distance_m, self.lap_length_m)
+        return at if at <= template.length_m else None
+
+    def showing(self, distance_m: float, now: float) -> "Showing | None":
+        """The template to draw, or None.
+
+        Where two windows overlap - Ascari's corners are close enough that
+        they do - the one whose window started most recently wins, because
+        that is the corner being driven into rather than the one just left.
+        """
+        best: "Showing | None" = None
+        best_at = None
+        for template in self.templates:
+            at = self._inside(template, distance_m)
+            if at is None:
+                continue
+            self._last_inside[template.corner.index] = now
+            if best_at is None or at < best_at:
+                best_at, best = at, Showing(template, at, past_corner=False)
+
+        if best is not None:
+            return best
+
+        # Outside every window. Hold the one just left, briefly, so the
+        # driver can look at whether it fitted once the corner no longer
+        # needs their attention.
+        for template in self.templates:
+            last = self._last_inside.get(template.corner.index)
+            if last is not None and now - last <= TEMPLATE_HOLD_S:
+                return Showing(template, template.length_m, past_corner=True)
+        return None
+
+    def tone_due(self, distance_m: float) -> bool:
+        """True exactly once per corner, as the reference brake point passes."""
+        for template in self.templates:
+            at = self._inside(template, distance_m)
+            if at is None or at < template.brake_at_m:
+                continue
+            index = template.corner.index
+            if index in self._toned:
+                continue
+            self._toned.add(index)
+            return True
+        return False

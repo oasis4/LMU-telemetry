@@ -102,3 +102,116 @@ def test_the_reference_entry_speed_is_carried(monza):
     model, trace = monza
     for one in templates_for(trace, model.corners):
         assert one.entry_speed_kmh > 0.0
+
+
+# -- arming ----------------------------------------------------------------
+
+from lmu_telemetry.live.template import TEMPLATE_HOLD_S, TemplateWatch
+
+LAP = 6000.0
+
+
+def _one_template():
+    """A window from 700 m to 1100 m, braking at 800 m, corner starting 950 m."""
+    offsets = np.arange(0.0, 401.0, 2.0)
+    corner = _corner_at(950.0, 1100.0)
+    return Template(
+        corner=corner, start_m=700.0, length_m=400.0,
+        brake_at_m=100.0, entry_at_m=250.0, entry_speed_kmh=180.0,
+        offsets_m=offsets, abs_m=offsets + 700.0,
+        brake=np.zeros_like(offsets), throttle=np.ones_like(offsets),
+    )
+
+
+def _corner_at(start_m, end_m):
+    from lmu_telemetry.core.corners import Corner
+
+    return Corner(index=1, name="T1", start_m=start_m,
+                  apex_m=(start_m + end_m) / 2, end_m=end_m,
+                  radius_m=60.0, heading_deg=90.0, direction="L")
+
+
+def test_nothing_shows_before_the_window():
+    watch = TemplateWatch([_one_template()], LAP)
+    assert watch.showing(400.0, 0.0) is None
+
+
+def test_the_template_shows_inside_its_window():
+    watch = TemplateWatch([_one_template()], LAP)
+    found = watch.showing(800.0, 0.0)
+    assert found is not None
+    assert found.at_m == pytest.approx(100.0)
+    assert found.past_corner is False
+
+
+def test_it_is_held_briefly_after_the_corner():
+    """During the corner the driver has no attention to spare. Afterwards is
+    when they can look at whether it fitted."""
+    watch = TemplateWatch([_one_template()], LAP)
+    watch.showing(1000.0, 10.0)
+    held = watch.showing(1200.0, 10.5)
+    assert held is not None
+    assert held.past_corner is True
+
+
+def test_the_hold_lets_go():
+    watch = TemplateWatch([_one_template()], LAP)
+    watch.showing(1000.0, 10.0)
+    watch.showing(1200.0, 10.5)
+    assert watch.showing(1400.0, 10.0 + TEMPLATE_HOLD_S + 0.1) is None
+
+
+def test_the_tone_falls_due_once_at_the_brake_point():
+    watch = TemplateWatch([_one_template()], LAP)
+    watch.showing(750.0, 0.0)
+    assert watch.tone_due(750.0) is False, "before the mark"
+    assert watch.tone_due(805.0) is True, "at the mark"
+    assert watch.tone_due(850.0) is False, "already sounded"
+    assert watch.tone_due(900.0) is False
+
+
+def test_the_tone_is_not_due_outside_a_window():
+    watch = TemplateWatch([_one_template()], LAP)
+    assert watch.tone_due(400.0) is False
+
+
+def test_a_new_lap_arms_everything_again():
+    watch = TemplateWatch([_one_template()], LAP)
+    watch.showing(750.0, 0.0)
+    watch.tone_due(805.0)
+
+    watch.reset()
+    watch.showing(750.0, 100.0)
+    assert watch.tone_due(805.0) is True
+
+
+def test_a_window_across_the_line_still_arms():
+    """The one case offsets exist for."""
+    offsets = np.arange(0.0, 401.0, 2.0)
+    across = Template(
+        corner=_corner_at(150.0, 300.0), start_m=5900.0, length_m=400.0,
+        brake_at_m=100.0, entry_at_m=250.0, entry_speed_kmh=180.0,
+        offsets_m=offsets, abs_m=(offsets + 5900.0) % LAP,
+        brake=np.zeros_like(offsets), throttle=np.ones_like(offsets),
+    )
+    watch = TemplateWatch([across], LAP)
+    assert watch.showing(5950.0, 0.0) is not None, "before the line"
+    found = watch.showing(100.0, 0.1)
+    assert found is not None and found.at_m == pytest.approx(200.0)
+    assert watch.tone_due(5000.0) is False, "the far side of the lap"
+
+
+def test_the_nearest_window_wins_when_two_overlap():
+    """Ascari's corners are close enough that their approaches overlap. The
+    one being driven into is the one whose window started most recently."""
+    first = _one_template()
+    second = Template(
+        corner=_corner_at(1150.0, 1300.0), start_m=900.0, length_m=400.0,
+        brake_at_m=100.0, entry_at_m=250.0, entry_speed_kmh=170.0,
+        offsets_m=np.arange(0.0, 401.0, 2.0),
+        abs_m=np.arange(0.0, 401.0, 2.0) + 900.0,
+        brake=np.zeros(201), throttle=np.ones(201),
+    )
+    watch = TemplateWatch([first, second], LAP)
+    found = watch.showing(1000.0, 0.0)
+    assert found.template.corner.start_m == 1150.0
