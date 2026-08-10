@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..core.geometry import GRID_STEP_M
 from ..core.session import Session
 from ..core.track_model import build_track_model
 from ..core.trace import build_trace
@@ -28,6 +29,8 @@ from ..recordings import default_recordings_dir
 from .buffer import LapBuffer
 from .overlay import POSITIONS
 from .replay import replay
+from .template import TemplateWatch, templates_for
+from .tone import play_brake_tone
 from .watch import CornerWatch
 
 #: The panel is read by a driver, not sampled by an instrument. Redrawing at
@@ -299,11 +302,16 @@ def main(argv: "list[str] | None" = None) -> int:
 
     buffer = LapBuffer(reference.grid)
     watch = CornerWatch(reference, model.corners)
+    templates = TemplateWatch(
+        templates_for(reference, model.corners),
+        float(reference.grid[-1]) + GRID_STEP_M,
+    )
+    print(f"templates: {len(templates.templates)} braked corners")
     drawn_at = 0.0
     on_lap = None
 
     try:
-        _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap)
+        _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_lap)
     except KeyboardInterrupt:
         # Reading the game runs until stopped, and the way it is stopped is
         # Ctrl-C. A traceback there reads as a fault when it is the exit.
@@ -314,7 +322,7 @@ def main(argv: "list[str] | None" = None) -> int:
     return 0
 
 
-def _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap) -> None:
+def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_lap) -> None:
     for sample, lap in source:
         if lap != on_lap:
             # A new lap. The buffer and the watch both start again; the watch
@@ -324,7 +332,9 @@ def _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap) -> None:
             on_lap = lap
             buffer.reset()
             watch.reset()
+            templates.reset()
         buffer.add(sample)
+        _sound_if_due(templates, sample)
 
         # An out lap or an in lap is not a lap. Said once, when it is first
         # known, so the quiet that follows has a reason attached rather than
@@ -368,7 +378,53 @@ def _drive(source, buffer, watch, reference, overlay, drawn_at, on_lap) -> None:
             # means this lap took longer to get to the same piece of track.
             was = float(np.interp(sample.distance_m, reference.grid, reference.time_s))
             overlay.show_delta(sample.time_s - was)
+            _show_template(overlay, templates, buffer, watch, sample, now)
             overlay.pump()
+
+
+def _show_template(overlay, templates, buffer, watch, sample, now) -> None:
+    """Put the braking template up, or take it down.
+
+    Nothing is shown on a lap that used the pit lane, by the same rule that
+    silences the sentences there: an out lap is not a lap, and a template
+    inviting the driver to match a qualifying brake point on cold tyres out of
+    the pits is worse than no template.
+    """
+    showing = templates.showing(sample.distance_m, now)
+    if showing is None or watch.why_silent is not None:
+        return overlay.hide_template()
+
+    template = showing.template
+    try:
+        driven = buffer.trace()
+    except ValueError:
+        return overlay.hide_template()      # fewer than two samples so far
+
+    # Only as far as the car has come. Past that the buffer holds its last
+    # sample flat, and a line drawn there is that instant repeated - which
+    # would look like a driver holding a steady pedal into a corner they have
+    # not reached.
+    reached = int(np.searchsorted(template.offsets_m, showing.at_m, side="right"))
+    upto = template.abs_m[:reached]
+    own_brake = np.interp(upto, driven.grid, driven.brake)
+    own_throttle = np.interp(upto, driven.grid, driven.throttle)
+
+    entry_delta = None
+    if showing.at_m >= template.entry_at_m:
+        mine = float(np.interp(
+            template.abs_m[
+                int(np.searchsorted(template.offsets_m, template.entry_at_m))
+            ],
+            driven.grid, driven.speed_kmh,
+        ))
+        entry_delta = mine - template.entry_speed_kmh
+
+    overlay.show_template(showing, own_brake, own_throttle, entry_delta)
+
+
+def _sound_if_due(templates, sample) -> None:
+    if templates.tone_due(sample.distance_m):
+        play_brake_tone()
 
 
 if __name__ == "__main__":

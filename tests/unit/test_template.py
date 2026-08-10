@@ -236,3 +236,35 @@ def test_the_most_recently_left_window_wins_the_hold():
     held = watch.showing(1350.0, TEMPLATE_HOLD_S)   # outside both, both held
     assert held is not None
     assert held.template.corner.start_m == 1150.0
+
+
+# -- driving a recorded lap through it -------------------------------------
+
+
+def test_a_recorded_lap_arms_every_braked_corner_once(monza):
+    """The end-to-end property: driving the reference through its own
+    templates sounds each corner exactly once, in track order."""
+    model, trace = monza
+    made = templates_for(trace, model.corners)
+    watch = TemplateWatch(made, float(trace.grid[-1]) + 2.0)
+
+    sounded = []
+    for i in range(len(trace.grid)):
+        here = float(trace.grid[i])
+        watch.showing(here, i * 0.02)
+        if watch.tone_due(here):
+            sounded.append(here)
+
+    assert len(sounded) == len(made), f"{len(sounded)} tones, {len(made)} corners"
+    assert sounded == sorted(sounded), "tones out of track order"
+
+
+def test_the_drivers_line_is_sampled_where_the_reference_was(monza):
+    """The claim the strip rests on. Interpolating the driver's own trace at
+    the template's own distances is what makes the two comparable."""
+    model, trace = monza
+    one = templates_for(trace, model.corners)[0]
+    own = np.interp(one.abs_m, trace.grid, trace.brake)
+    assert np.allclose(own, one.brake, atol=1e-9), (
+        "the reference sampled at its own distances is not itself"
+    )
