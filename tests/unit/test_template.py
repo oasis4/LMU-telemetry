@@ -6,15 +6,25 @@ distance, and every consumer would have to know it; as an offset it is one
 range that starts at zero.
 """
 
+from dataclasses import replace as _replace
+
 import numpy as np
 import pytest
 
 from lmu_telemetry.core.coaching import SAME_BRAKING_M
+from lmu_telemetry.core.geometry import span_indices
 from lmu_telemetry.core.metrics import APPROACH_M, corner_metrics
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import build_track_model
 from lmu_telemetry.core.trace import build_trace
-from lmu_telemetry.live.template import Template, offset_into, templates_for
+from lmu_telemetry.live.template import (
+    Template,
+    best_templates,
+    braking_events,
+    offset_into,
+    template_from,
+    templates_for,
+)
 
 
 def test_an_offset_is_measured_forward_from_the_window_start():
@@ -185,6 +195,112 @@ def test_a_genuinely_separate_brake_point_keeps_its_own_template(monza):
         one = made[corner.index]
         assert one.corner.name == corner.name
         assert one.corner.end_m == corner.end_m
+
+
+# -- best-of-set templates ---------------------------------------------------
+#
+# templates_for draws every strip from the one reference lap. best_templates
+# draws each from whichever of a pool of candidates drove that braking event
+# quickest. The event set itself still comes from the reference alone, via
+# braking_events, which templates_for is now built on top of too.
+
+
+def test_braking_events_matches_what_templates_for_groups(monza):
+    """braking_events is templates_for's own grouping, pulled out so a
+    best-of-set caller can group once and fill many times."""
+    model, trace = monza
+    events = braking_events(trace, model.corners)
+    made = templates_for(trace, model.corners)
+    assert len(events) == len(made)
+    assert [e.name for e in events] == [t.corner.name for t in made]
+    assert [e.end_m for e in events] == [t.corner.end_m for t in made]
+
+
+def test_template_from_is_none_for_a_lap_that_never_brakes(monza):
+    """A lap that took an event flat is not a worse version of it - it is not
+    a version at all, and must not be offered to best_templates."""
+    model, trace = monza
+    events = braking_events(trace, model.corners)
+    never_brakes = _replace(trace, brake=np.zeros_like(trace.brake))
+    assert template_from(never_brakes, events[0]) is None
+
+
+def test_best_templates_with_only_the_reference_matches_templates_for(monza):
+    model, trace = monza
+    label = "Q 2026-03-28 lap 2"
+    made = best_templates(trace, [(label, trace)], model.corners)
+    plain = templates_for(trace, model.corners)
+    assert len(made) == len(plain)
+    for best, reference_only in zip(made, plain):
+        assert best.corner == reference_only.corner
+        assert best.start_m == pytest.approx(reference_only.start_m)
+        assert best.length_m == pytest.approx(reference_only.length_m)
+        assert best.brake_at_m == pytest.approx(reference_only.brake_at_m)
+        assert best.entry_at_m == pytest.approx(reference_only.entry_at_m)
+        assert best.entry_speed_kmh == pytest.approx(reference_only.entry_speed_kmh)
+        assert np.allclose(best.offsets_m, reference_only.offsets_m)
+        assert np.allclose(best.abs_m, reference_only.abs_m)
+        assert np.allclose(best.brake, reference_only.brake)
+        assert np.allclose(best.throttle, reference_only.throttle)
+        assert best.source == label
+
+
+def test_best_templates_picks_the_quicker_laps_version(monza):
+    """A lap built to be measurably quicker through exactly one event, and
+    identical everywhere else, must move only that event's template."""
+    model, trace = monza
+    events = braking_events(trace, model.corners)
+    target = next(e for e in events if e.start_m < e.end_m)
+    inside = span_indices(trace.grid, target.start_m, target.end_m)
+    assert len(inside) >= 2, "test needs a real span to shrink"
+
+    # Halve the elapsed time across this one event's own samples and nowhere
+    # else, so every other event's corner_metrics(...).time_s is untouched
+    # and the reference - listed first, so it wins ties - keeps them.
+    quicker_time = trace.time_s.copy()
+    quicker_time[inside] = trace.time_s[inside[0]] + (
+        trace.time_s[inside] - trace.time_s[inside[0]]
+    ) * 0.5
+    quicker = _replace(trace, time_s=quicker_time)
+
+    made = best_templates(
+        trace, [("reference", trace), ("quicker lap", quicker)], model.corners
+    )
+    by_index = {t.corner.index: t for t in made}
+    plain = {t.corner.index: t for t in templates_for(trace, model.corners)}
+
+    assert by_index[target.index].source == "quicker lap"
+    for index, template in by_index.items():
+        if index == target.index:
+            continue
+        assert template.source == "reference"
+        assert template.brake_at_m == pytest.approx(plain[index].brake_at_m)
+        assert np.allclose(template.brake, plain[index].brake)
+
+
+def test_every_template_from_best_templates_has_a_source(monza):
+    model, trace = monza
+    made = best_templates(trace, [("Q 2026-03-28 lap 2", trace)], model.corners)
+    assert made
+    assert all(t.source for t in made)
+
+
+def test_adding_a_lap_that_brakes_elsewhere_does_not_change_the_event_set(monza):
+    """The strip set is grouped from the reference alone. A candidate that
+    brakes hard everywhere - including corners the reference took flat - must
+    not add a strip, because best_templates only ever asks about the events
+    braking_events already found."""
+    model, trace = monza
+    events = braking_events(trace, model.corners)
+
+    brakes_everywhere = _replace(trace, brake=np.ones_like(trace.brake))
+    made = best_templates(
+        trace,
+        [("reference", trace), ("brakes everywhere", brakes_everywhere)],
+        model.corners,
+    )
+    assert len(made) == len(events)
+    assert {t.corner.index for t in made} == {e.index for e in events}
 
 
 # -- arming ----------------------------------------------------------------

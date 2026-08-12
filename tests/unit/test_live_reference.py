@@ -275,3 +275,49 @@ def test_omitting_the_class_changes_nothing(fixture_dir):
     from lmu_telemetry.live.reference import find_reference
 
     assert find_reference(fixture_dir, MONZA, length_m=5776.0) is not None
+
+
+# -- the best-of-set candidate pool ------------------------------------------
+#
+# find_quickest_laps is what a template's best-of-set draws its candidates
+# from. It must never disagree with find_reference about what matches - the
+# two are tested here as the one function they actually are.
+
+
+def test_find_quickest_laps_returns_at_most_keep_quickest_first(fixture_dir):
+    from lmu_telemetry.live.reference import find_quickest_laps
+
+    found = find_quickest_laps(
+        fixture_dir, MONZA, length_m=5776.0, car_class="GT3", keep=3
+    )
+    assert found
+    assert len(found) <= 3
+    assert [r.duration_s for r in found] == sorted(r.duration_s for r in found)
+
+
+def test_find_quickest_laps_first_element_is_find_reference(fixture_dir):
+    """The two can never disagree about what matches: find_reference is
+    find_quickest_laps(keep=1)'s own first element, not a second copy of the
+    same filters."""
+    from lmu_telemetry.live.reference import find_quickest_laps
+
+    found = find_quickest_laps(fixture_dir, MONZA, length_m=5776.0, car_class="GT3")
+    reference = find_reference(fixture_dir, MONZA, length_m=5776.0, car_class="GT3")
+    assert found
+    assert found[0] == reference
+
+
+def test_find_quickest_laps_obeys_the_layout_and_class_filters(fixture_dir):
+    """Asking on the full Monza course in GT3 must never return a Curva
+    Grande lap or a Hypercar one, the same guarantee find_reference already
+    gives for a single lap."""
+    from lmu_telemetry.live.reference import find_quickest_laps
+
+    found = find_quickest_laps(
+        fixture_dir, MONZA, length_m=5776.0, car_class="GT3", keep=40
+    )
+    assert found
+    for reference in found:
+        with Session.open(reference.path) as session:
+            assert session.info.layout != "Monza Curva Grande Circuit"
+            assert session.info.car_class != "Hyper"

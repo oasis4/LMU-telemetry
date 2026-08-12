@@ -26,7 +26,12 @@ def offset_into(start_m: float, distance_m: float, lap_length_m: float) -> float
 
 @dataclass(frozen=True)
 class Template:
-    """One corner's approach and braking zone, taken from the reference lap."""
+    """One corner's approach and braking zone, taken from one lap.
+
+    That lap is always the reference's when the template comes from
+    :func:`templates_for`, but :func:`best_templates` may fill it from
+    whichever candidate drove the event quickest - see ``source`` below.
+    """
 
     corner: Corner
     #: Where the window begins, as a lap distance.
@@ -42,14 +47,21 @@ class Template:
     abs_m: np.ndarray
     brake: np.ndarray
     throttle: np.ndarray
+    #: A short label for which lap this strip was drawn from, e.g.
+    #: ``"Q 2026-03-27 lap 2"``, so the driver can see whose corner they are
+    #: chasing. Empty for a template built by :func:`templates_for`, where
+    #: there is only ever the one lap and nothing to say that distinguishes
+    #: it. Defaulted rather than required so every existing construction -
+    #: in tests, and in :func:`template_from` itself - keeps working without
+    #: naming a lap it has no opinion about.
+    source: str = ""
 
 
-def templates_for(reference: LapTrace, corners) -> "list[Template]":
-    """One template per braking event the reference used.
+def braking_events(reference: LapTrace, corners) -> "list[Corner]":
+    """The merged corners - one per braking event - taken from *reference*.
 
-    A corner taken flat is skipped rather than drawn with no mark on it: it
-    has nothing to teach here, and at Monza it would mean eleven strips a lap
-    where seven are useful.
+    A corner taken flat contributes no event: it has nothing to teach here,
+    and at Monza it would mean eleven strips a lap where seven are useful.
 
     Consecutive corners whose reference brake points fall within
     ``SAME_BRAKING_M`` of each other are one braking event, not several -
@@ -57,13 +69,16 @@ def templates_for(reference: LapTrace, corners) -> "list[Template]":
     already apply so a chicane is not coached on the same brake application
     two or three times over. Left ungrouped here, Monza's Roggia and Ascari
     would each draw more than one strip and sound more than one tone for a
-    stop the driver felt once. The merged template spans from the earliest
-    window's start to the last corner's end, and keeps the earliest brake
-    point and the first corner's entry - it is that first corner's approach
-    that the driver is actually braking for.
-    """
-    lap_length_m = float(reference.grid[-1]) + GRID_STEP_M
+    stop the driver felt once. The merged corner spans from the first
+    corner's own start to the last corner's end, and keeps the first
+    corner's name-leading identity - see :mod:`core.blocks`'s ``Block.name``,
+    which names a run of corners the same way.
 
+    Grouped from *reference* alone, and only from it: the set of braking
+    events a best-of-set template draws its strips for must not change with
+    which laps happen to be in the candidate pool, or which strips exist
+    would depend on which lap won - see :func:`best_templates`.
+    """
     braked: "list[tuple[Corner, CornerMetrics]]" = []
     for corner in corners:
         figures = corner_metrics(reference, corner)
@@ -84,11 +99,11 @@ def templates_for(reference: LapTrace, corners) -> "list[Template]":
         else:
             groups.append([item])
 
-    made: "list[Template]" = []
+    events: "list[Corner]" = []
     for group in groups:
-        first_corner, first_figures = group[0]
+        first_corner, _first_figures = group[0]
         last_corner, _last_figures = group[-1]
-        corner = (
+        events.append(
             first_corner if len(group) == 1
             else replace(
                 first_corner,
@@ -96,28 +111,117 @@ def templates_for(reference: LapTrace, corners) -> "list[Template]":
                 end_m=last_corner.end_m,
             )
         )
-        start_m = (first_corner.start_m - APPROACH_M) % lap_length_m
-        window = span_indices(reference.grid, start_m, last_corner.end_m)
-        if len(window) < 2:
-            continue
-        abs_m = reference.grid[window]
-        offsets = np.array(
-            [offset_into(start_m, float(d), lap_length_m) for d in abs_m]
-        )
-        made.append(Template(
-            corner=corner,
-            start_m=start_m,
-            length_m=float(offsets[-1]),
-            brake_at_m=offset_into(
-                start_m, first_figures.brake_point_m, lap_length_m
-            ),
-            entry_at_m=offset_into(start_m, first_corner.start_m, lap_length_m),
-            entry_speed_kmh=first_figures.entry_speed_kmh,
-            offsets_m=offsets,
-            abs_m=abs_m,
-            brake=reference.brake[window],
-            throttle=reference.throttle[window],
-        ))
+    return events
+
+
+def template_from(trace: LapTrace, event: Corner) -> "Template | None":
+    """Fill one braking event's window from one lap, or None if it did not
+    brake there.
+
+    *event* is one of :func:`braking_events`'s own corners, already merged
+    where a chicane shares one brake point, so the window read here is
+    exactly the one the reference's own version of it covers. ``None``
+    rather than a template with nothing in it: a lap that took this event
+    flat is not a worse version of the reference's line through it, it is
+    not a version at all, and :func:`best_templates` must not be able to
+    pick it.
+    """
+    lap_length_m = float(trace.grid[-1]) + GRID_STEP_M
+    # Read against *event* itself, not the first physical corner it was
+    # merged from. entry_speed_kmh is unaffected either way - it only reads
+    # trace.speed_kmh at corner.start_m, which the merge never moves - but
+    # brake_point_m is not provably the same: a merged event's wider
+    # corner.end_m widens the window _brake_shape hunts the last brake
+    # application in, so a second, closer application between two merged
+    # corners could in principle be picked up instead of the true first one.
+    # Checked, not proven: identical to the old per-corner figure across
+    # every group in the Monza fixture, including both of its actual merges,
+    # and across a real 249-recording corpus run. If a future track's
+    # geometry ever produces a divergence, it will show up here first.
+    figures = corner_metrics(trace, event)
+    if figures.brake_point_m is None:
+        return None
+
+    start_m = (event.start_m - APPROACH_M) % lap_length_m
+    window = span_indices(trace.grid, start_m, event.end_m)
+    if len(window) < 2:
+        return None
+    abs_m = trace.grid[window]
+    offsets = np.array(
+        [offset_into(start_m, float(d), lap_length_m) for d in abs_m]
+    )
+    return Template(
+        corner=event,
+        start_m=start_m,
+        length_m=float(offsets[-1]),
+        brake_at_m=offset_into(start_m, figures.brake_point_m, lap_length_m),
+        entry_at_m=offset_into(start_m, event.start_m, lap_length_m),
+        entry_speed_kmh=figures.entry_speed_kmh,
+        offsets_m=offsets,
+        abs_m=abs_m,
+        brake=trace.brake[window],
+        throttle=trace.throttle[window],
+    )
+
+
+def templates_for(reference: LapTrace, corners) -> "list[Template]":
+    """One template per braking event the reference used, all from that one
+    lap.
+
+    Built directly on :func:`braking_events` and :func:`template_from`, so
+    there is one grouping rule and one window-filling rule rather than two
+    copies that could drift apart - :func:`best_templates` runs its many-lap
+    search through the same two functions.
+    """
+    made: "list[Template]" = []
+    for event in braking_events(reference, corners):
+        template = template_from(reference, event)
+        if template is not None:
+            made.append(template)
+    return made
+
+
+def best_templates(reference: LapTrace, others, corners) -> "list[Template]":
+    """Each braking event from whichever lap drove it quickest.
+
+    *others* is every candidate to consider, as ``(source, trace)`` pairs -
+    *source* a short label for where the lap came from (``"Q 2026-03-27 lap
+    2"``), *trace* built with the reference's own track model, so its window
+    lands on the reference's own metres rather than its own. *reference* is
+    expected to be one of them: ``live.__main__`` gets this for free, because
+    the candidate pool it hands in is drawn from :func:`reference.find_quickest_laps`,
+    whose own first element is what :func:`reference.find_reference` picked
+    as the reference in the first place. So an event nobody beat keeps the
+    reference's own version, and the result is never worse than
+    :func:`templates_for`.
+
+    The set of events is :func:`braking_events` (*reference*, *corners*) and
+    nothing else - grouped once, before any candidate is looked at, so which
+    strips exist is a property of the circuit and only their contents vary
+    with who drove them. A candidate that brakes somewhere the reference did
+    not never gets to add a strip for it; one that took a reference braking
+    event flat (:func:`template_from` returning None for it) simply does not
+    compete for that one.
+
+    Ranking is by ``corner_metrics(trace, event).time_s`` - the time actually
+    spent driving that stretch, on whichever lap did it. Ties keep whichever
+    candidate was offered first, which is why the reference belongs at the
+    front of *others*: an event nobody beat then keeps the reference's own
+    template rather than an arbitrarily-chosen tie.
+    """
+    made: "list[Template]" = []
+    for event in braking_events(reference, corners):
+        best: "Template | None" = None
+        best_time: "float | None" = None
+        for source, trace in others:
+            template = template_from(trace, event)
+            if template is None:
+                continue
+            time_s = corner_metrics(trace, event).time_s
+            if best_time is None or time_s < best_time:
+                best_time, best = time_s, replace(template, source=source)
+        if best is not None:
+            made.append(best)
     return made
 
 

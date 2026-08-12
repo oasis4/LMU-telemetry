@@ -24,13 +24,13 @@ import numpy as np
 from ..core.geometry import GRID_STEP_M
 from ..core.metrics import APPROACH_M
 from ..core.session import Session
-from ..core.track_model import build_track_model
+from ..core.track_model import build_track_model, TrackModel
 from ..core.trace import build_trace
 from ..recordings import default_recordings_dir
 from .buffer import LapBuffer
 from .overlay import POSITIONS
 from .replay import replay
-from .template import TemplateWatch, templates_for
+from .template import TemplateWatch, best_templates, templates_for
 from .tone import play_brake_tone
 from .watch import CornerWatch
 
@@ -56,6 +56,82 @@ def _trace_of(path: Path, lap_number: int | None):
                 have = ", ".join(str(l.number) for l in session.laps)
                 raise SystemExit(f"{path.name}: no lap {lap_number}; it has {have}")
         return build_trace(session, lap, model.track_length_m), model, lap
+
+
+def _candidate_source(path: Path, lap_number: int, model: TrackModel):
+    """One best-of-set candidate, as the ``(source, trace)`` pair
+    :func:`live.template.best_templates` wants - or None if it could not be
+    built.
+
+    Built with *model*'s own ``track_length_m`` and ``origin`` rather than
+    this recording's, so its absolute distances land on the reference's own
+    metres: a candidate on a different track model would put its strip
+    against the wrong point on the strip's own axis, which is metres and
+    nothing else - see ``overlay.Overlay._strip_points``.
+
+    Skipped, not raised, on anything that goes wrong - a damaged recording,
+    a lap number that no longer exists in it, a lap too short to measure -
+    the same treatment :func:`reference.find_quickest_laps` already gives a
+    file it cannot read. One bad candidate is not a reason to fall back to
+    the single reference lap for every corner.
+    """
+    try:
+        with Session.open(path) as session:
+            lap = next((l for l in session.laps if l.number == lap_number), None)
+            if lap is None:
+                return None
+            trace = build_trace(
+                session, lap, model.track_length_m, origin=model.origin
+            )
+            letter = (session.info.session_type or "?")[:1].upper()
+            date = (session.info.recorded_at or "?").split("T")[0]
+            return f"{letter} {date} lap {lap.number}", trace
+    except Exception:
+        return None
+
+
+def _choose_templates(auto_found, recordings: Path, live, reference, model):
+    """The templates for this run, and the line describing where they came
+    from.
+
+    Only reaches for the best-of-set when *auto_found* is not None - that is,
+    when the reference itself was found automatically rather than named with
+    --reference. A driver who named a lap gets that lap, unmixed with any
+    other: :func:`templates_for`, unchanged.
+
+    *auto_found* doubles as the track name to search on: it is the
+    ``Reference`` :func:`_await_reference` already picked, and asking
+    :func:`reference.find_quickest_laps` with its own ``track`` is what keeps
+    the candidate pool and the reference itself agreeing about which circuit
+    is meant.
+    """
+    if auto_found is None:
+        made = templates_for(reference, model.corners)
+        return made, f"{len(made)} braked corners"
+
+    from .reference import find_quickest_laps
+
+    # Re-read rather than thread through from _await_reference: the length
+    # and class are cheap live-telemetry reads, and threading them through
+    # would mean two functions agreeing on a shape neither otherwise needs.
+    length_m = live.track_length_m() if hasattr(live, "track_length_m") else None
+    car_class = live.car_class() if hasattr(live, "car_class") else None
+    candidates = find_quickest_laps(
+        recordings, auto_found.track, length_m=length_m, car_class=car_class
+    )
+
+    sources = []
+    for candidate in candidates:
+        got = _candidate_source(candidate.path, candidate.lap_number, model)
+        if got is not None:
+            sources.append(got)
+
+    made = best_templates(reference, sources, model.corners)
+    contributed = {template.source for template in made}
+    return made, (
+        f"{len(made)} braking events from {len(sources)} laps "
+        f"({len(contributed)} different laps contributed)"
+    )
 
 
 def _from_game(live):
@@ -266,6 +342,10 @@ def main(argv: "list[str] | None" = None) -> int:
 
     if args.reference is not None:
         chosen, chosen_lap = args.reference, args.reference_lap
+        # An explicit --reference names one lap; the driver gets that lap,
+        # not a best-of-set built behind their back. None here is what tells
+        # _choose_templates so, below.
+        auto_found = None
     else:
         if live is None:
             parser.error("--reference is required when replaying a recording")
@@ -273,6 +353,7 @@ def main(argv: "list[str] | None" = None) -> int:
         if found is None:
             return 1
         chosen, chosen_lap = found.path, found.lap_number
+        auto_found = found
 
     reference, model, reference_lap = _trace_of(chosen, chosen_lap)
     print(
@@ -303,11 +384,11 @@ def main(argv: "list[str] | None" = None) -> int:
 
     buffer = LapBuffer(reference.grid)
     watch = CornerWatch(reference, model.corners)
-    templates = TemplateWatch(
-        templates_for(reference, model.corners),
-        float(reference.grid[-1]) + GRID_STEP_M,
+    built, templates_line = _choose_templates(
+        auto_found, args.recordings, live, reference, model
     )
-    print(f"templates: {len(templates.templates)} braked corners")
+    templates = TemplateWatch(built, float(reference.grid[-1]) + GRID_STEP_M)
+    print(f"templates: {templates_line}")
     drawn_at = 0.0
     on_lap = None
 

@@ -449,15 +449,22 @@ class Overlay:
         )
 
         if entry_delta_kmh is None:
-            self.entry.configure(text=template.corner.name.upper())
+            label = template.corner.name.upper()
         else:
             # Shown, never corrected for. A car arriving slower may brake
             # later, but turning that into a moved mark would be a braking
             # model, and the number would look measured when it was invented.
-            self.entry.configure(
-                text=f"{template.corner.name.upper()}   "
-                     f"{entry_delta_kmh:+.0f} km/h in"
+            label = (
+                f"{template.corner.name.upper()}   "
+                f"{entry_delta_kmh:+.0f} km/h in"
             )
+        if template.source:
+            # Which lap this strip actually is, for a template that did not
+            # come from the single reference - see live.template.best_templates.
+            # Appended rather than given its own line: this row is read at a
+            # glance mid-corner, not studied.
+            label = f"{label}   {template.source}"
+        self.entry.configure(text=label)
 
         if self._set_content("template"):
             self._relayout()
