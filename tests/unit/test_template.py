@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from lmu_telemetry.core.coaching import SAME_BRAKING_M
-from lmu_telemetry.core.geometry import span_indices
+from lmu_telemetry.core.geometry import GRID_STEP_M, span_indices
 from lmu_telemetry.core.metrics import APPROACH_M, corner_metrics
 from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import build_track_model
@@ -333,26 +333,67 @@ def test_best_templates_covers_every_event_even_with_no_candidates_at_all(monza)
         assert by_index[template.corner.index].source == ""
 
 
-def test_best_templates_covers_every_event_when_others_excludes_the_reference(
-    monza_q_file,
+def test_best_templates_falls_back_to_the_reference_for_an_event_the_only_candidate_misses(
+    monza,
 ):
     """The reference lap belongs in *others* in the ordinary case - it is
     ``find_quickest_laps``'s own first element - but best_templates must not
-    depend on a caller having put it there. A pool holding a real, different
-    lap and nothing else must still cover every event braking_events found,
-    filled from that other lap wherever it has something, and from the
-    reference's own fallback everywhere else."""
-    with Session.open(monza_q_file) as session:
-        model = build_track_model([session])
-        laps = {lap.number: lap for lap in session.laps}
-        reference = build_trace(session, laps[2], model.track_length_m)
-        other_lap = build_trace(session, laps[1], model.track_length_m)
+    depend on a caller having put it there. This is a test of the fallback
+    actually *firing*, not just of the final count - a test built on a real
+    other lap that happens to brake everywhere the reference does would pass
+    whether or not the fallback existed, and prove nothing.
 
-    events = braking_events(reference, model.corners)
-    made = best_templates(reference, [("other lap", other_lap)], model.corners)
+    So the candidate here is built, not found: identical to the reference
+    everywhere except across one event's own window, where its brake channel
+    is held at zero - genuinely never touching the pedal there, not merely
+    slower to. That event can then only be filled from the reference; a
+    second, untouched event is left as a control the candidate can still
+    win, so the assertion below is specifically "the gap came from the
+    fallback and a real win still came from the candidate", not just "the
+    count came out right".
+    """
+    model, trace = monza
+    events = braking_events(trace, model.corners)
+    non_wrapping = [e for e in events if e.start_m < e.end_m]
+    assert len(non_wrapping) >= 2, "test needs two straightforward events"
+
+    # First and last, not two neighbours: adjacent events' APPROACH_M windows
+    # overlap at Monza (T1's reaches back into T2's own corner), and zeroing
+    # one's window would blind the candidate in the other's too.
+    missing, present = non_wrapping[0], non_wrapping[-1]
+    lap_length_m = float(trace.grid[-1]) + GRID_STEP_M
+    assert missing.end_m < (present.start_m - APPROACH_M), (
+        "test setup needs two events whose approach windows do not overlap"
+    )
+
+    gap = span_indices(
+        trace.grid, (missing.start_m - APPROACH_M) % lap_length_m, missing.end_m
+    )
+    other_brake = trace.brake.copy()
+    other_brake[gap] = 0.0
+    other_lap = _replace(trace, brake=other_brake)
+    assert corner_metrics(other_lap, missing).brake_point_m is None, (
+        "test setup is wrong: the candidate must not brake for the missing event"
+    )
+    assert corner_metrics(other_lap, present).brake_point_m is not None, (
+        "test setup is wrong: the candidate must still brake for the control event"
+    )
+
+    made = best_templates(trace, [("other lap", other_lap)], model.corners)
 
     assert len(made) == len(events)
     assert {t.corner.index for t in made} == {e.index for e in events}
+
+    by_index = {t.corner.index: t for t in made}
+    assert by_index[missing.index].source == "", (
+        "the event the candidate could not supply must come from the "
+        "reference fallback"
+    )
+    assert by_index[present.index].source == "other lap", (
+        "an event the candidate can supply must actually come from it - "
+        "otherwise this test would pass even if the fallback swallowed "
+        "everything"
+    )
 
 
 # -- arming ----------------------------------------------------------------
