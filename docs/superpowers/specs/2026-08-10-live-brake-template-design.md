@@ -86,10 +86,32 @@ two chances for the strip and the sentence to disagree about one corner.
 
 ## When it appears
 
-Armed on entering the window, held until about 1.5 s past the corner's end,
-then the sentence takes over. The hold is deliberate: during the corner the
-driver has no attention to spare, and afterwards is when they can look at
-whether it fitted.
+Armed on entering the window; a fresh approach always takes the panel's one
+optional slot, sentence or no sentence, because an 11 s sentence
+(`SENTENCE_SECONDS`) must not swallow the next corner's strip. That much
+shipped as planned.
+
+What did not ship as planned is the *other* end - held until about 1.5 s
+past the corner's end, then the sentence takes over, as this section
+originally said. A braking event's window ends at the same distance
+`CornerWatch.advance` completes the corner at, so the redraw immediately
+after a finding fires sees the *same* corner's held strip, not a later
+one - "the strip wins whenever it is due" therefore reversed the ordinary
+case rather than only covering the gap it was meant for: the sentence, the
+tool's actual advice, was gone within about 67 ms of arriving, for 8 of 11
+corners at Monza. A driver reported it as the panel "growing, shrinking and
+shifting."
+
+The shipped rule instead: **a sentence wins the slot the instant it is
+computed, and holds it until `SENTENCE_SECONDS` or a fresh window evicts
+it.** `TEMPLATE_HOLD_S` (about 1.5 s) is still real and still runs, but for
+the common case - a corner whose comparison produced a sentence - the
+sentence has already taken the slot by the time the hold would otherwise
+show, so the hold is not visible there. It is visibly reachable only for a
+corner whose comparison produced no sentence at all: that corner still gets
+to sit on screen briefly after it is over, rather than the panel dropping to
+the delta alone at the same instant the corner ends. Recorded here so it is
+a decision and not a drift, the same as the reversal above.
 
 Only corners the **reference braked for** are armed. A flat-out corner has
 nothing to teach here, and arming every corner would put eleven strips a lap

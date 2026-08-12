@@ -456,25 +456,25 @@ def test_the_hold_lets_go():
 def test_the_tone_falls_due_once_at_the_brake_point():
     watch = TemplateWatch([_one_template()], LAP)
     watch.showing(750.0, 0.0)
-    assert watch.tone_due(750.0) is False, "before the mark"
-    assert watch.tone_due(805.0) is True, "at the mark"
-    assert watch.tone_due(850.0) is False, "already sounded"
-    assert watch.tone_due(900.0) is False
+    assert watch.tone_due(750.0, 0.0) is False, "before the mark"
+    assert watch.tone_due(805.0, 0.1) is True, "at the mark"
+    assert watch.tone_due(850.0, 0.2) is False, "already sounded"
+    assert watch.tone_due(900.0, 0.3) is False
 
 
 def test_the_tone_is_not_due_outside_a_window():
     watch = TemplateWatch([_one_template()], LAP)
-    assert watch.tone_due(400.0) is False
+    assert watch.tone_due(400.0, 0.0) is False
 
 
 def test_a_new_lap_arms_everything_again():
     watch = TemplateWatch([_one_template()], LAP)
     watch.showing(750.0, 0.0)
-    watch.tone_due(805.0)
+    watch.tone_due(805.0, 0.1)
 
     watch.reset()
     watch.showing(750.0, 100.0)
-    assert watch.tone_due(805.0) is True
+    assert watch.tone_due(805.0, 100.1) is True
 
 
 def test_a_window_across_the_line_still_arms():
@@ -490,7 +490,7 @@ def test_a_window_across_the_line_still_arms():
     assert watch.showing(5950.0, 0.0) is not None, "before the line"
     found = watch.showing(100.0, 0.1)
     assert found is not None and found.at_m == pytest.approx(200.0)
-    assert watch.tone_due(5000.0) is False, "the far side of the lap"
+    assert watch.tone_due(5000.0, 0.2) is False, "the far side of the lap"
 
 
 def test_the_nearest_window_wins_when_two_overlap():
@@ -535,7 +535,28 @@ def test_the_most_recently_left_window_wins_the_hold():
 
 def test_a_recorded_lap_arms_every_braked_corner_once(monza):
     """The end-to-end property: driving the reference through its own
-    templates sounds each corner exactly once, in track order."""
+    templates sounds each corner exactly once, in track order - and, the
+    assertion this test used to be missing, each tone fires for the corner
+    the panel is actually showing at that instant.
+
+    showing() and the tone used to be decided independently: showing()
+    picked a display by nearest-window, due_template() scanned for a passed
+    brake point on its own, and nothing tied the two answers together. At
+    Monza's own T1/T2 - not a constructed case, the first corner of this
+    fixture, every lap - the windows overlap enough that they disagreed:
+    T2's window opens 68 m before T1's own brake point, so by the time T1's
+    brake point passed the panel had already switched to T2, and the tone
+    fired into a strip for the wrong corner. Counting and ordering the
+    tones, which is all this test used to do, cannot see that: the count
+    and the order were both still right, only the *pairing* was wrong. Six
+    task reviews and eight fix rounds missed it for exactly that reason.
+
+    Uses ``due_template``/``mark_toned`` rather than ``tone_due`` - the same
+    pair ``live.__main__._sound_if_due`` calls - because ``tone_due`` only
+    ever answers True/False and this needs to know *which* template was
+    found due, to compare it against what ``showing()`` says is on screen
+    at the same distance and clock reading.
+    """
     model, trace = monza
     made = templates_for(trace, model.corners)
     watch = TemplateWatch(made, float(trace.grid[-1]) + 2.0)
@@ -543,9 +564,20 @@ def test_a_recorded_lap_arms_every_braked_corner_once(monza):
     sounded = []
     for i in range(len(trace.grid)):
         here = float(trace.grid[i])
-        watch.showing(here, i * 0.02)
-        if watch.tone_due(here):
+        now = i * 0.02
+        showing = watch.showing(here, now)
+        due = watch.due_template(here, now)
+        if due is not None:
+            watch.mark_toned(due)
             sounded.append(here)
+            assert showing is not None and not showing.past_corner, (
+                f"the tone for {due.corner.name!r} fired with no fresh "
+                f"approach on screen for it"
+            )
+            assert showing.template.corner.index == due.corner.index, (
+                f"the tone fired for {due.corner.name!r} while the panel "
+                f"showed {showing.template.corner.name!r}"
+            )
 
     assert len(sounded) == len(made), f"{len(sounded)} tones, {len(made)} corners"
     assert sounded == sorted(sounded), "tones out of track order"

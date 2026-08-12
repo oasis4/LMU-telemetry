@@ -280,21 +280,45 @@ class TemplateWatch:
         """The template to draw, or None.
 
         Where two windows overlap - Ascari's corners are close enough that
-        they do - the one whose window started most recently wins, because
-        that is the corner being driven into rather than the one just left.
+        they do - the one whose own brake point has not yet been reached and
+        is soonest wins: that is the corner the driver is still braking
+        towards, and it is what keeps this method and :meth:`due_template` in
+        agreement, since the latter is now built directly on this one. Only
+        once every open window has already had its brake point pass - both
+        corners of a pair mid-corner, the first already braked into and being
+        held through the second's approach - does the window that opened most
+        recently win, the same tie-break this used unconditionally before.
+
+        That "most recently opened" rule alone is what let the panel and the
+        tone name different corners at Monza's T1/T2: T2's window opens 68 m
+        before T1's own brake point, so "most recently opened" swapped the
+        strip to T2 while T1's brake point was still 68 m away, and the tone
+        - which scanned for a passed brake point on its own - fired for T1
+        into a panel already showing T2. Picking the soonest still-ahead
+        brake point instead keeps T1 on screen right through the frame its
+        own mark is crossed, so a tone built on *this* method's answer can no
+        longer disagree with what is drawn.
         """
-        best: "Showing | None" = None
-        best_at = None
+        ahead: "tuple[Template, float] | None" = None
+        ahead_remaining = None
+        any_open: "tuple[Template, float] | None" = None
+        any_open_at = None
         for template in self.templates:
             at = self._inside(template, distance_m)
             if at is None:
                 continue
             self._last_inside[template.corner.index] = now
-            if best_at is None or at < best_at:
-                best_at, best = at, Showing(template, at, past_corner=False)
+            if any_open_at is None or at < any_open_at:
+                any_open_at, any_open = at, (template, at)
+            if at <= template.brake_at_m:
+                remaining = template.brake_at_m - at
+                if ahead_remaining is None or remaining < ahead_remaining:
+                    ahead_remaining, ahead = remaining, (template, at)
 
-        if best is not None:
-            return best
+        chosen = ahead if ahead is not None else any_open
+        if chosen is not None:
+            template, at = chosen
+            return Showing(template, at, past_corner=False)
 
         # Outside every window. Hold the one just left, briefly, so the
         # driver can look at whether it fitted once the corner no longer
@@ -312,8 +336,38 @@ class TemplateWatch:
                 held_last, held = last, Showing(template, template.length_m, past_corner=True)
         return held
 
-    def due_template(self, distance_m: float) -> "Template | None":
-        """The template whose brake mark has just been passed, if any.
+    def due_template(self, distance_m: float, now: float) -> "Template | None":
+        """The template whose brake mark has just been passed, if any - and
+        only if it is the one currently on screen.
+
+        Built on :meth:`showing` rather than its own scan of
+        ``self.templates``, so the tone can never name a corner other than
+        the one the strip is showing: before this, the two ran independent
+        searches - :meth:`showing` picked nearest-window for *display*,
+        this scanned for a passed brake point for the *tone* - and nothing
+        tied their answers together. At Monza's T1/T2, where the windows
+        overlap, that let the tone fire for T1 while the panel had already
+        switched to T2. Routing through :meth:`showing` makes the two
+        structurally unable to disagree, rather than agreeing only because
+        both searches happened to land on the same corner.
+
+        A corner whose own brake point is passed while a *different*
+        template is on screen - the scenario the fix above has to answer
+        for - simply is not due here: ``showing()`` no longer lets that
+        happen for a *fresh* approach (see its docstring), and a *held*
+        display (``past_corner``) is excluded outright, since a held
+        ``Showing``'s ``at_m`` is pinned to the window's far edge and would
+        otherwise always read as "past the mark". The corner it belongs to
+        already had its own chance to tone while it was the fresh, on-screen
+        template; this is not a second chance for it, and it does not sound
+        late. Nothing here can leave a corner un-toned *silently*, though:
+        :meth:`due_template` returning ``None`` for a corner whose brake
+        point has genuinely passed just means it toned already (see
+        :meth:`mark_toned`) or its approach was never the one shown - and a
+        corner braked for by the reference always gets a turn as the fresh
+        display at some point along its own approach, because a window only
+        loses that contest to another window whose own brake point is
+        nearer still.
 
         Split out from :meth:`tone_due` so a caller can decide *not* to sound
         it - the overlay withholds the tone for a window it never watched
@@ -323,27 +377,31 @@ class TemplateWatch:
         that separately, once the caller has decided the tone is actually
         going to sound.
         """
-        for template in self.templates:
-            at = self._inside(template, distance_m)
-            if at is None or at < template.brake_at_m:
-                continue
-            if template.corner.index in self._toned:
-                continue
-            return template
-        return None
+        showing = self.showing(distance_m, now)
+        if showing is None or showing.past_corner:
+            return None
+        template = showing.template
+        if showing.at_m < template.brake_at_m:
+            return None
+        if template.corner.index in self._toned:
+            return None
+        return template
 
     def mark_toned(self, template: "Template") -> None:
         """Record that *template*'s tone has sounded, so it does not again."""
         self._toned.add(template.corner.index)
 
-    def tone_due(self, distance_m: float) -> bool:
-        """True exactly once per corner, as the reference brake point passes.
+    def tone_due(self, distance_m: float, now: float) -> bool:
+        """True exactly once per corner, as the reference brake point passes
+        while that corner is the one on screen.
 
         Built on :meth:`due_template` and :meth:`mark_toned` rather than its
         own loop, so there is one place that decides which template a
-        distance is due for.
+        distance is due for. Takes ``now`` for the same reason
+        :meth:`showing` does now that this is built on it - the display
+        arbitration needs to know how long ago a window was last entered.
         """
-        template = self.due_template(distance_m)
+        template = self.due_template(distance_m, now)
         if template is None:
             return False
         self.mark_toned(template)

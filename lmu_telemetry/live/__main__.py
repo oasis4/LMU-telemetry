@@ -440,7 +440,14 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
             if overlay is not None:
                 overlay.show_finding("", "out lap - not measured")
 
-        _sound_if_due(templates, buffer, watch, sample)
+        # Read once and threaded through both the tone and the redraw below,
+        # rather than read twice: templates.showing() now backs both
+        # _sound_if_due and _show_template (see live.template.TemplateWatch),
+        # and it must see the same "now" from both call sites in one sample
+        # or the display it arbitrates could answer differently a few
+        # microseconds apart for no reason but the clock having moved.
+        now = time.perf_counter()
+        _sound_if_due(templates, buffer, watch, sample, now)
 
         for finding in watch.advance(buffer):
             corner = finding.comparison.corner
@@ -467,8 +474,8 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
 
         # Paced on the wall clock, not on lap time: lap time restarts at every
         # line, and a replay running at 40x would redraw 40 times as often as
-        # a driver can read.
-        now = time.perf_counter()
+        # a driver can read. Reuses the "now" read above the tone check
+        # rather than reading the clock again - see the comment there.
         if overlay is not None and now - drawn_at >= 1.0 / REDRAW_HZ:
             drawn_at = now
             # Where the reference was in time when it reached here. Positive
@@ -569,7 +576,7 @@ def _show_template(overlay, templates, buffer, watch, sample, now) -> None:
     overlay.show_template(showing, own_brake, own_throttle, entry_delta)
 
 
-def _sound_if_due(templates, buffer, watch, sample) -> None:
+def _sound_if_due(templates, buffer, watch, sample, now: float) -> None:
     """Sound the brake mark, unless this lap or this window is not watched.
 
     Two silences, both mirrored from the guards ``_show_template`` already
@@ -587,8 +594,20 @@ def _sound_if_due(templates, buffer, watch, sample) -> None:
     armed for the rest of this lap, which never matters (both guards, once
     true, stay true for the whole lap), but it means "armed" keeps meaning
     one thing.
+
+    ``now`` is the same read of the clock ``_drive`` passes to
+    ``_show_template`` later in this same sample - not a second call to
+    ``time.perf_counter()`` - because ``due_template`` is now built on
+    ``TemplateWatch.showing``, the very arbitration the strip is drawn from
+    (see ``live.template.TemplateWatch.due_template``). A tone and a redraw
+    a few microseconds apart, asking that arbitration with two different
+    clock readings, could in principle answer differently; sharing one
+    reading closes that off rather than leaving it as a coincidence that
+    happens not to matter yet. This is also *why* the tone can no longer be
+    later than a sample: it runs off ``showing()`` every sample, not off the
+    15 Hz redraw ``_show_template`` is throttled to.
     """
-    template = templates.due_template(sample.distance_m)
+    template = templates.due_template(sample.distance_m, now)
     if template is None:
         return
     if watch.why_silent is not None:

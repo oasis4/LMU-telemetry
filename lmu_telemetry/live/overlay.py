@@ -67,7 +67,13 @@ POSITIONS = (
 #: Height of one pedal strip at the design scale, and the gap between the two.
 _STRIP_H = 34.0
 _STRIP_GAP = 6.0
-#: The reference, and the driver's own lines over it.
+#: The reference, and the driver's own lines over it. OWN_BRAKE == LOST and
+#: OWN_THROTTLE == GAINED, deliberately: losing time and braking read as the
+#: same red, gaining time and lifting off the brake read as the same green,
+#: so the strip and the delta figure agree at a glance. Kept as their own
+#: names rather than aliased to LOST/GAINED so a future re-theme of the delta
+#: colours does not silently drag the strip's colours along with it - if the
+#: sameness stops being wanted, these two lines are where to stop it.
 GHOST = "#4a4a58"
 OWN_BRAKE = "#ff6b52"
 OWN_THROTTLE = "#43d08a"

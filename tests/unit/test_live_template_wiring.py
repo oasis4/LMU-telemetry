@@ -178,7 +178,7 @@ def test_a_why_silent_lap_neither_draws_nor_sounds(monkeypatch):
 
     sounded = []
     monkeypatch.setattr(live_main, "play_brake_tone", lambda: sounded.append(True))
-    _sound_if_due(templates, buffer, watch, sample)
+    _sound_if_due(templates, buffer, watch, sample, now=0.0)
     assert sounded == [], "a silenced lap must not sound the tone either"
 
     # Prove the guard, not a coincidence, suppressed it: since why_silent
@@ -187,7 +187,7 @@ def test_a_why_silent_lap_neither_draws_nor_sounds(monkeypatch):
     # it does not, the first call already consumed it and the assertion
     # above was not testing what it claimed to.
     watch.why_silent = None
-    _sound_if_due(templates, buffer, watch, sample)
+    _sound_if_due(templates, buffer, watch, sample, now=0.0)
     assert sounded == [True], "the same brake point should still be armed once the lap is usable"
 
 
@@ -206,7 +206,7 @@ def test_a_window_that_was_never_watched_does_not_sound_either(monkeypatch):
 
     sounded = []
     monkeypatch.setattr(live_main, "play_brake_tone", lambda: sounded.append(True))
-    _sound_if_due(templates, buffer, watch, sample)
+    _sound_if_due(templates, buffer, watch, sample, now=0.0)
     assert sounded == [], "a window whose strip is hidden must not sound its tone"
 
     # Prove it is still armed, not consumed: a fresh lap that does watch the
@@ -217,7 +217,7 @@ def test_a_window_that_was_never_watched_does_not_sound_either(monkeypatch):
         fresh_buffer,
         np.arange(template.start_m, template.start_m + template.brake_at_m + 10.0, 2.0),
     )
-    _sound_if_due(templates, fresh_buffer, watch, fresh_sample)
+    _sound_if_due(templates, fresh_buffer, watch, fresh_sample, now=0.0)
     assert sounded == [True], "the same brake point should still be armed next lap"
 
 
