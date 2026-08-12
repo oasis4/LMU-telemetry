@@ -104,6 +104,16 @@ def _choose_templates(auto_found, recordings: Path, live, reference, model):
     :func:`reference.find_quickest_laps` with its own ``track`` is what keeps
     the candidate pool and the reference itself agreeing about which circuit
     is meant.
+
+    The candidate scan below is not required to find the reference's own lap
+    again for the result to be complete - ``best_templates`` puts the
+    reference into its own pool regardless, so a scan that comes back empty,
+    or a rebuild that fails for that one recording, still yields every
+    braking event rather than silently losing some. Re-reading
+    ``live.track_length_m()``/``live.car_class()`` here rather than
+    threading them through from ``_await_reference`` is therefore a
+    readability choice, not a correctness one: the two reads disagreeing
+    would at worst narrow the candidate pool, not drop a strip.
     """
     if auto_found is None:
         made = templates_for(reference, model.corners)
@@ -111,9 +121,6 @@ def _choose_templates(auto_found, recordings: Path, live, reference, model):
 
     from .reference import find_quickest_laps
 
-    # Re-read rather than thread through from _await_reference: the length
-    # and class are cheap live-telemetry reads, and threading them through
-    # would mean two functions agreeing on a shape neither otherwise needs.
     length_m = live.track_length_m() if hasattr(live, "track_length_m") else None
     car_class = live.car_class() if hasattr(live, "car_class") else None
     candidates = find_quickest_laps(
@@ -127,7 +134,10 @@ def _choose_templates(auto_found, recordings: Path, live, reference, model):
             sources.append(got)
 
     made = best_templates(reference, sources, model.corners)
-    contributed = {template.source for template in made}
+    # Empty-string sources are best_templates' own reference fallback, not a
+    # lap from the pool - counting them would claim a "different lap
+    # contributed" for an event nobody in *sources* actually won.
+    contributed = {template.source for template in made if template.source}
     return made, (
         f"{len(made)} braking events from {len(sources)} laps "
         f"({len(contributed)} different laps contributed)"

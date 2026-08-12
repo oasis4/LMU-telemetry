@@ -303,6 +303,58 @@ def test_adding_a_lap_that_brakes_elsewhere_does_not_change_the_event_set(monza)
     assert {t.corner.index for t in made} == {e.index for e in events}
 
 
+# -- the reference-in-the-pool guarantee -------------------------------------
+#
+# best_templates must never return fewer events than braking_events found,
+# and that has to be true regardless of what *others* turns out to hold - not
+# only in the ordinary case where a caller remembered to put the reference in
+# it. These drive the fallback directly: an empty pool, and a pool that holds
+# a real, different lap but not the reference.
+
+
+def test_best_templates_covers_every_event_even_with_no_candidates_at_all(monza):
+    """A candidate scan that came back empty - no recordings matched, or
+    every one of them failed to rebuild - must still produce the full set of
+    strips, from the reference itself, not fewer."""
+    model, trace = monza
+    events = braking_events(trace, model.corners)
+    plain = templates_for(trace, model.corners)
+
+    made = best_templates(trace, [], model.corners)
+
+    assert len(made) == len(events)
+    assert {t.corner.index for t in made} == {e.index for e in events}
+    by_index = {t.corner.index: t for t in made}
+    for template in plain:
+        assert template.brake_at_m == pytest.approx(
+            by_index[template.corner.index].brake_at_m
+        )
+        assert np.allclose(template.brake, by_index[template.corner.index].brake)
+        assert by_index[template.corner.index].source == ""
+
+
+def test_best_templates_covers_every_event_when_others_excludes_the_reference(
+    monza_q_file,
+):
+    """The reference lap belongs in *others* in the ordinary case - it is
+    ``find_quickest_laps``'s own first element - but best_templates must not
+    depend on a caller having put it there. A pool holding a real, different
+    lap and nothing else must still cover every event braking_events found,
+    filled from that other lap wherever it has something, and from the
+    reference's own fallback everywhere else."""
+    with Session.open(monza_q_file) as session:
+        model = build_track_model([session])
+        laps = {lap.number: lap for lap in session.laps}
+        reference = build_trace(session, laps[2], model.track_length_m)
+        other_lap = build_trace(session, laps[1], model.track_length_m)
+
+    events = braking_events(reference, model.corners)
+    made = best_templates(reference, [("other lap", other_lap)], model.corners)
+
+    assert len(made) == len(events)
+    assert {t.corner.index for t in made} == {e.index for e in events}
+
+
 # -- arming ----------------------------------------------------------------
 
 from lmu_telemetry.live.template import TEMPLATE_HOLD_S, TemplateWatch

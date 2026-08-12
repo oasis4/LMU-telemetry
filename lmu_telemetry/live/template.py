@@ -184,16 +184,26 @@ def templates_for(reference: LapTrace, corners) -> "list[Template]":
 def best_templates(reference: LapTrace, others, corners) -> "list[Template]":
     """Each braking event from whichever lap drove it quickest.
 
-    *others* is every candidate to consider, as ``(source, trace)`` pairs -
-    *source* a short label for where the lap came from (``"Q 2026-03-27 lap
-    2"``), *trace* built with the reference's own track model, so its window
-    lands on the reference's own metres rather than its own. *reference* is
-    expected to be one of them: ``live.__main__`` gets this for free, because
-    the candidate pool it hands in is drawn from :func:`reference.find_quickest_laps`,
-    whose own first element is what :func:`reference.find_reference` picked
-    as the reference in the first place. So an event nobody beat keeps the
-    reference's own version, and the result is never worse than
-    :func:`templates_for`.
+    *others* is every extra candidate to consider, as ``(source, trace)``
+    pairs - *source* a short label for where the lap came from (``"Q
+    2026-03-27 lap 2"``), *trace* built with the reference's own track
+    model, so its window lands on the reference's own metres rather than its
+    own.
+
+    *reference* itself does not need to be in *others* - it is always in the
+    pool anyway, appended after them with an empty source. This is a
+    property the function enforces, not a precondition it trusts its caller
+    to have met: a caller that also lists the reference, properly labelled
+    (as ``live.__main__`` does whenever :func:`reference.find_quickest_laps`
+    found it), keeps that label for any event it wins, because ties favour
+    whichever candidate was offered first and the caller's own copy is
+    offered before this function's own fallback copy. But an event nobody in
+    *others* has a template for still gets the reference's own version -
+    with ``source=""``, the same template :func:`templates_for` would have
+    given it - rather than losing the strip because a candidate scan came
+    back empty, was stale, or happened to exclude the reference's own lap.
+    That is what makes the result never worse than :func:`templates_for` a
+    guarantee, not a hope resting on how *others* was built.
 
     The set of events is :func:`braking_events` (*reference*, *corners*) and
     nothing else - grouped once, before any candidate is looked at, so which
@@ -204,16 +214,14 @@ def best_templates(reference: LapTrace, others, corners) -> "list[Template]":
     compete for that one.
 
     Ranking is by ``corner_metrics(trace, event).time_s`` - the time actually
-    spent driving that stretch, on whichever lap did it. Ties keep whichever
-    candidate was offered first, which is why the reference belongs at the
-    front of *others*: an event nobody beat then keeps the reference's own
-    template rather than an arbitrarily-chosen tie.
+    spent driving that stretch, on whichever lap did it.
     """
+    pool = (*others, ("", reference))
     made: "list[Template]" = []
     for event in braking_events(reference, corners):
         best: "Template | None" = None
         best_time: "float | None" = None
-        for source, trace in others:
+        for source, trace in pool:
             template = template_from(trace, event)
             if template is None:
                 continue
