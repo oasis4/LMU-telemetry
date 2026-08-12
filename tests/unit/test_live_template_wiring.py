@@ -27,18 +27,39 @@ LAP = 6000.0
 
 
 class _FakeOverlay:
-    """Records what it was told, and nothing more."""
+    """Records what it was told, and mirrors just enough of the real
+    Overlay's content-slot bookkeeping - see ``Overlay._set_content`` and
+    ``Overlay.content`` - for the precedence tests to mean something: which
+    of "template" / "finding" / None is current, so a test can tell whether
+    a call actually changed anything. The precedence *decision* itself is
+    not reimplemented here; it lives in ``_show_template``, which is what
+    these tests call.
+    """
 
     def __init__(self) -> None:
         self.shown = None          # (showing, own_brake, own_throttle, entry_delta) | None
         self.hidden_count = 0
+        self.finding = None        # (name, sentence) | None
+        self.content: "str | None" = None
 
     def show_template(self, showing, own_brake, own_throttle, entry_delta_kmh=None) -> None:
         self.shown = (showing, np.asarray(own_brake), np.asarray(own_throttle), entry_delta_kmh)
+        self.content = "template"
 
     def hide_template(self) -> None:
         self.hidden_count += 1
         self.shown = None
+        if self.content == "template":
+            self.content = None
+
+    def show_finding(self, name: str, sentence: "str | None") -> None:
+        if not sentence:
+            if self.content == "finding":
+                self.content = None
+            self.finding = None
+            return
+        self.finding = (name, sentence)
+        self.content = "finding"
 
 
 @dataclass
@@ -252,6 +273,70 @@ def test_the_pit_lane_gate_is_set_before_the_tone_can_fire(monkeypatch):
 
     assert watch.why_silent is not None, "test setup is wrong"
     assert sounded == [], "the first in-pits sample must not sound the tone"
+
+
+# -- precedence between a template's hold and a sentence --------------------
+#
+# A corner's template window ends at corner.end_m - the same threshold
+# CornerWatch.advance uses to complete the corner - so the held Showing for
+# a corner (past_corner=True, up to TEMPLATE_HOLD_S) is what the very next
+# redraw sees after show_finding puts that same corner's sentence up. That
+# is the sequence these two tests drive directly, rather than through
+# _widget_order alone: _widget_order takes no history, so a test built only
+# on it cannot see an interleaving bug like this one.
+
+
+def test_a_held_showing_does_not_evict_a_sentence_just_shown_for_it():
+    template = _template_at()
+    templates = TemplateWatch([template], LAP)
+    buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+    watch = _FakeWatch()
+    overlay = _FakeOverlay()
+
+    # Drive through the window so it is recorded as having been inside it -
+    # TemplateWatch._last_inside - at t=10.0.
+    inside_m = template.start_m + template.length_m - 2.0
+    sample = _feed(buffer, np.arange(template.start_m, inside_m + 2.0, 2.0))
+    templates.showing(sample.distance_m, now=10.0)
+
+    # The corner has just completed: watch.advance() would yield a finding
+    # here, and _drive calls overlay.show_finding with it.
+    overlay.show_finding("T1", "You can brake later here")
+    assert overlay.content == "finding", "test setup is wrong"
+
+    # The very next redraw, well inside TEMPLATE_HOLD_S (1.5 s): the car has
+    # moved past the window's end, so templates.showing() now returns the
+    # held Showing for the SAME corner.
+    past_m = template.start_m + template.length_m + 20.0
+    past_sample = _feed(buffer, np.arange(inside_m + 2.0, past_m, 2.0))
+    _show_template(overlay, templates, buffer, watch, past_sample, now=10.05)
+
+    assert overlay.content == "finding", (
+        "the held showing must not evict a sentence just shown for the same corner"
+    )
+    assert overlay.finding == ("T1", "You can brake later here")
+
+
+def test_a_freshly_armed_window_does_replace_a_sentence():
+    """The other direction: a fresh approach (past_corner=False) always
+    takes the slot, sentence or no sentence - otherwise an eleven-second
+    sentence would swallow the next corner's strip."""
+    template = _template_at()
+    templates = TemplateWatch([template], LAP)
+    buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+    watch = _FakeWatch()
+    overlay = _FakeOverlay()
+
+    overlay.show_finding("T0", "Level with the reference here")
+    assert overlay.content == "finding", "test setup is wrong"
+
+    # A fresh approach: the car is inside the window, not past its end, so
+    # showing.past_corner is False.
+    sample = _feed(buffer, np.arange(template.start_m, template.start_m + 50.0, 2.0))
+    _show_template(overlay, templates, buffer, watch, sample, now=0.0)
+
+    assert overlay.content == "template", "a freshly armed window must win the slot"
+    assert overlay.shown is not None
 
 
 # -- windows opened before the buffer was watching ---------------------------

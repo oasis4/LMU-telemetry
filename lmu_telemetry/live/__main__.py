@@ -421,10 +421,31 @@ def _show_template(overlay, templates, buffer, watch, sample, now) -> None:
     silences the sentences there: an out lap is not a lap, and a template
     inviting the driver to match a qualifying brake point on cold tyres out of
     the pits is worse than no template.
+
+    A held showing (``showing.past_corner``) is the ``TEMPLATE_HOLD_S`` grace
+    period after a corner, not a fresh approach - and that corner's own
+    window ends at the same ``corner.end_m`` ``CornerWatch`` completes it at,
+    so the held ``Showing`` for it is what the very next redraw sees after
+    ``watch.advance`` yields a finding and ``overlay.show_finding`` puts the
+    sentence up. Calling ``overlay.show_template`` there would evict that
+    sentence within about 67 ms of it arriving - which is what a driver
+    reported as the panel "growing, shrinking and shifting". So a held
+    showing is left alone while a finding is current: the corner is over,
+    and the sentence is the more useful of the two to be looking at. A
+    freshly armed window (``not showing.past_corner``) is never held back
+    this way - see ``Overlay.show_template``'s docstring, which states the
+    same rule from the other side: a window for the *next* corner still
+    takes the slot back, sentence or no sentence, or an eleven-second
+    sentence would swallow it. The consequence, not a defect:
+    ``TEMPLATE_HOLD_S`` is visibly reachable only for a corner that produced
+    no sentence.
     """
     showing = templates.showing(sample.distance_m, now)
     if showing is None or watch.why_silent is not None:
         return overlay.hide_template()
+
+    if showing.past_corner and overlay.content == "finding":
+        return
 
     template = showing.template
     if not _window_was_watched(template, buffer):

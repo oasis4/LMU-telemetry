@@ -213,6 +213,20 @@ class Overlay:
         """The screen the panel was put on, so a caller can say which."""
         return self._monitor
 
+    @property
+    def content(self) -> "str | None":
+        """What is currently in the optional slot below the delta:
+        ``"template"``, ``"finding"``, or ``None``.
+
+        Read by ``_show_template`` to decide whether a held ``Showing`` -
+        the ``TEMPLATE_HOLD_S`` grace period after a corner, not a fresh
+        approach - is allowed to take the slot back from a sentence that has
+        just arrived for that same corner. See ``show_template``'s and
+        ``show_finding``'s docstrings, which state that same rule from
+        their own sides.
+        """
+        return self._content
+
     def _relayout(self) -> None:
         """Re-fix the window to whatever the content now needs.
 
@@ -345,9 +359,18 @@ class Overlay:
         at a name with no advice under it would read it as a tip that failed to
         arrive.
 
-        A finding always wins the content slot, even over a template that is
-        currently up: the two are never shown together, and the corner that
-        just finished is the more urgent of the two to say something about.
+        Always wins the content slot the instant this is called, even over a
+        template that is currently up: the corner that just finished is the
+        more urgent of the two to say something about, and a finding is a
+        discrete event rather than something redrawn every frame the way a
+        template is. What happens to it afterwards is ``_show_template``'s
+        decision, not this method's: a held ``Showing`` for the very corner
+        this sentence is about arrives on the next redraw - the window and
+        the finding both complete at the same ``corner.end_m`` - and is
+        *not* allowed to evict it, while a freshly armed window for the next
+        corner still is. See ``show_template``'s docstring, which states the
+        same rule from the other side, and ``Overlay.content``.
+
         Always relayouts, transition or not - the sentence's own text changes
         corner to corner, and a longer or shorter one can wrap onto a
         different number of lines even while the slot itself stays "finding".
@@ -375,12 +398,25 @@ class Overlay:
         and a canvas of a few hundred segments redraws far inside the 15 Hz
         this is called at.
 
-        A template always wins the content slot, even over a sentence that
-        is currently up: the two are never shown together. Relayouts only on
-        the actual transition into showing - the canvas and the entry label
-        are both fixed height once up, so redrawing their content here every
-        frame does not need a new one, and relayouting every frame is
-        exactly the jitter this was written to remove.
+        Always wins the content slot when this is actually called, even over
+        a sentence that is currently up - a freshly armed window for the
+        next corner has to win, or an eleven-second sentence would swallow
+        its strip. But ``_show_template`` does not call this for every
+        ``Showing`` it is handed: a held one (``showing.past_corner``) - the
+        ``TEMPLATE_HOLD_S`` grace period after this same corner, not a new
+        approach - is withheld instead while a finding is current, because
+        that corner's window ends at the same ``corner.end_m`` CornerWatch
+        completes it at, and letting the hold evict the sentence that had
+        just arrived for it was the tool's main output disappearing within
+        about 67 ms of showing up. See ``_show_template`` and
+        ``show_finding``'s docstring, which states the same rule from the
+        other side.
+
+        Relayouts only on the actual transition into showing - the canvas
+        and the entry label are both fixed height once up, so redrawing
+        their content here every frame does not need a new one, and
+        relayouting every frame is exactly the jitter this was written to
+        remove.
         """
         template = showing.template
         width, height = self._strip_width, self._strip_h
