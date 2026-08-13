@@ -146,6 +146,43 @@ on screen at Monza instead of seven.
 Nothing is shown on an out lap, by the rule added for the same reason the
 sentences are suppressed there.
 
+## Saying which lap this is
+
+A line above the delta, set once at startup: **who drove the reference, when,
+how much fuel it carried, and what it took.**
+
+`A Mueller  27.03.26  12 L  1:50.700`
+
+This was asked for after a session in which the driver could not tell whose
+lap they were chasing — and was right to wonder. The recordings folder holds
+two drivers, and "the quickest clean lap here" had been picking the quicker
+one every time: the Monza reference and all forty best-of-set candidates were
+a team-mate's, correctly and silently. The fuel figure is the other half of
+the same question, and it turns out to answer it: twelve litres is a
+qualifying run on fumes, which is not the same thing as a race lap and never
+was comparable to one.
+
+When the strips come from more than one lap the line ends `+n laps`. Only
+then — `+0 laps` on every ordinary line is noise.
+
+Anything the recording did not store is left out rather than shown empty. The
+test fixtures declare `Fuel Level` without storing it, so that is the ordinary
+case, not an exotic one.
+
+The line is packed once, above the delta, and is deliberately not part of
+`_widget_order`. Nothing in the content arbitration can evict it, and it costs
+no relayout when a strip or a sentence comes and goes.
+
+## The delta on a lap that is not a lap
+
+Nothing is shown on an out lap — except, until now, the delta, which went on
+counting a pit-lane crawl against a flying reference. The panel would announce
+"out lap - not measured", let that sentence expire after `SENTENCE_SECONDS`,
+and leave the driver with a large red number that meant nothing. It now reads
+`--.---`, which is what it already says everywhere else there is no gap worth
+showing, under the same `watch.why_silent` guard that silences the strip and
+the sentences.
+
 ## The tone
 
 Fires once per armed corner, when the driver's distance crosses the reference

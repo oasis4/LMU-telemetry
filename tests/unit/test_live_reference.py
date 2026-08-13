@@ -6,6 +6,8 @@ lap from a different circuit, which would compare a driver against a corner
 list that has nothing to do with where they are.
 """
 
+from pathlib import Path
+
 import pytest
 
 from lmu_telemetry.core.session import Session
@@ -321,3 +323,92 @@ def test_find_quickest_laps_obeys_the_layout_and_class_filters(fixture_dir):
         with Session.open(reference.path) as session:
             assert session.info.layout != "Monza Curva Grande Circuit"
             assert session.info.car_class != "Hyper"
+
+
+# -- saying which lap the delta is measured against --------------------------
+#
+# The driver spent a session unable to tell whose lap they were chasing. The
+# folder holds two drivers' recordings and "the quickest clean lap here"
+# had been picking the quicker driver every time, correctly and silently.
+
+
+def test_the_headline_names_the_driver_the_date_the_fuel_and_the_time():
+    from lmu_telemetry.live.reference import Reference, headline
+
+    line = headline(Reference(
+        path=Path("Monza_Q_2026-03-27T09_03_13Z.duckdb"), lap_number=2,
+        duration_s=110.7, track=MONZA, driver="A Mueller",
+        recorded_at="2026-03-27T09_03_13Z", fuel_l=11.84,
+    ))
+    assert "A Mueller" in line
+    assert "27.03.26" in line
+    assert "12 L" in line
+    assert "1:50.700" in line, "a driver reads a lap time in minutes"
+
+
+def test_the_headline_leaves_out_what_the_recording_did_not_store():
+    """A field reading "-" invites the driver to wonder what went wrong with
+    it mid-corner. The fixtures declare Fuel Level without storing it, so
+    this is the ordinary case for them, not an exotic one."""
+    from lmu_telemetry.live.reference import Reference, headline
+
+    line = headline(Reference(
+        path=Path("x.duckdb"), lap_number=2, duration_s=110.7, track=MONZA,
+        driver="A Mueller", recorded_at="2026-03-27T09_03_13Z", fuel_l=None,
+    ))
+    assert "L" not in line.replace("Mueller", "")
+    assert "1:50.700" in line
+
+    bare = headline(Reference(
+        path=Path("x.duckdb"), lap_number=2, duration_s=110.7, track=MONZA,
+    ))
+    assert bare == "1:50.700", bare
+
+
+def test_the_headline_says_when_the_strips_come_from_more_than_one_lap():
+    """Only then: "+0 laps" on every ordinary line would be noise."""
+    from lmu_telemetry.live.reference import Reference, headline
+
+    one = Reference(path=Path("x.duckdb"), lap_number=2, duration_s=110.7,
+                    track=MONZA, driver="A Mueller")
+    assert "laps" not in headline(one, contributing_laps=1)
+    assert "+5 laps" in headline(one, contributing_laps=6)
+
+
+def test_lap_time_formats_the_way_a_driver_reads_one():
+    from lmu_telemetry.live.reference import lap_time
+
+    assert lap_time(110.7) == "1:50.700"
+    assert lap_time(59.999) == "0:59.999"
+    assert lap_time(3661.5) == "61:01.500", "minutes, not hours - Le Mans"
+
+
+def test_the_scan_records_who_drove_each_lap(fixture_dir):
+    """The whole point: without this the panel cannot name a driver, and
+    picking the quickest lap in a mixed folder silently picks a person."""
+    from lmu_telemetry.live.reference import find_quickest_laps
+
+    found = find_quickest_laps(fixture_dir, MONZA, keep=5)
+    assert found
+    assert all(r.driver for r in found), "every recording names its driver"
+    assert all(r.recorded_at for r in found)
+
+
+def test_describe_reads_a_real_recording_and_survives_a_missing_channel(fixture_dir):
+    """The fixtures have no Fuel Level table, so this is also the test that
+    a missing channel drops one field rather than the whole line."""
+    from lmu_telemetry.live.reference import describe, find_reference
+
+    found = find_reference(fixture_dir, MONZA)
+    line = describe(found.path, found.lap_number)
+    assert found.driver in line
+    assert ":" in line, "the lap time should still be there"
+
+
+def test_describe_says_nothing_rather_than_something_wrong(tmp_path):
+    from lmu_telemetry.live.reference import describe
+
+    broken = tmp_path / "broken.duckdb"
+    broken.write_bytes(b"not a database")
+    assert describe(broken, 1) == ""
+    assert describe(tmp_path / "absent.duckdb", 1) == ""

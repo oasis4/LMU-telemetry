@@ -40,6 +40,16 @@ def test_the_template_and_the_finding_are_never_both_shown():
         assert not (template_group & order and finding_group & order), content
 
 
+def test_the_reference_line_is_not_the_arbitration_s_to_take_down():
+    """It names the lap the delta is measured against, and it is true for as
+    long as the overlay runs. Leaving it out of _widget_order is what keeps
+    it out of the content slot's reach: no state can evict it, and packing
+    it once at construction costs no relayout when a strip or a sentence
+    comes and goes."""
+    for content in (None, "template", "finding"):
+        assert "reference" not in Overlay._widget_order(content), content
+
+
 def test_the_order_does_not_depend_on_which_was_shown_first():
     """The actual bug, restated as a property: the order for "template" is
     the same whether the panel arrived there fresh, from a finding, or from

@@ -165,6 +165,18 @@ class Overlay:
 
         text_width = width - self.rail.cget("width") - 2 * pad
 
+        # Above the delta, and permanent. The delta is a number measured
+        # against a lap the driver never chose and, until this line existed,
+        # could not identify: one folder of recordings held two drivers, the
+        # quicker one's laps won every time, and nothing on screen said so.
+        # Packed first and never forgotten, so it costs no relayout and
+        # cannot take part in the content arbitration below.
+        self.reference = tk.Label(
+            card, text="", font=("Segoe UI", max(8, int(11 * k))),
+            fg=MUTED, bg=CARD, anchor="w",
+        )
+        self.reference.pack(anchor="w")
+
         self.delta = tk.Label(
             card, text="--.---", font=("Consolas", max(18, int(38 * k)), "bold"),
             fg=NEUTRAL, bg=CARD, anchor="w", width=0,
@@ -292,8 +304,27 @@ class Overlay:
              else monitor.y + monitor.height - height - margin)
         return x, y
 
+    def show_reference(self, described: str) -> None:
+        """Name the lap the delta is measured against, at the top of the card.
+
+        Set once at startup and left alone: the reference does not change
+        while the driver is out, and a line that redrew would be one more
+        thing moving in the corner of the eye.
+        """
+        self.reference.configure(text=described)
+        self._relayout()
+
     def show_delta(self, seconds: float | None) -> None:
-        """The live gap to the reference. ``None`` before there is one."""
+        """The live gap to the reference. ``None`` before there is one, and
+        on any lap that is not being measured.
+
+        A pit-lane lap is the case that matters: the sentences and the strip
+        already go quiet there, but the delta went on counting, so the one
+        number left on screen was the one number that meant nothing - a
+        driver reported reading it on an out lap and being told, correctly,
+        that it was an out lap. ``None`` puts it back to ``--.---``, which
+        already means "no gap to show" everywhere else.
+        """
         if seconds is None:
             self.delta.configure(text="--.---", fg=NEUTRAL)
             self.rail.configure(bg=NEUTRAL)

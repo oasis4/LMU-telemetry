@@ -12,6 +12,7 @@ because the truncation and the interpolation are the behaviour under test.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -41,6 +42,13 @@ class _FakeOverlay:
         self.hidden_count = 0
         self.finding = None        # (name, sentence) | None
         self.content: "str | None" = None
+        self.deltas: "list[float | None]" = []
+
+    def show_delta(self, seconds: "float | None") -> None:
+        self.deltas.append(seconds)
+
+    def pump(self) -> None:
+        pass
 
     def show_template(self, showing, own_brake, own_throttle, entry_delta_kmh=None) -> None:
         self.shown = (showing, np.asarray(own_brake), np.asarray(own_throttle), entry_delta_kmh)
@@ -273,6 +281,52 @@ def test_the_pit_lane_gate_is_set_before_the_tone_can_fire(monkeypatch):
 
     assert watch.why_silent is not None, "test setup is wrong"
     assert sounded == [], "the first in-pits sample must not sound the tone"
+
+
+def test_the_delta_stops_counting_on_a_lap_that_used_the_pit_lane(monkeypatch):
+    """The strip and the sentences already go quiet on an out lap. The delta
+    did not, so the one number left on screen was the only one that meant
+    nothing - counting a pit-lane crawl against a flying reference. The
+    driver reported reading it and being told, correctly, that it was an out
+    lap; the tool knew, and went on showing the number anyway.
+
+    The clock is driven by hand because _drive redraws at REDRAW_HZ: left to
+    the real one, two samples fed back to back land inside a single redraw
+    window and the second never draws, so the test would pass on the first
+    sample's delta while proving nothing about the second.
+    """
+    ticks = iter([100.0, 101.0, 102.0])
+    monkeypatch.setattr(live_main.time, "perf_counter", lambda: next(ticks))
+
+    template = _template_at()
+    templates = TemplateWatch([template], LAP)
+    buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+    watch = _FakeCornerWatch()
+    overlay = _FakeOverlay()
+
+    grid = np.arange(0.0, LAP, 2.0)
+    reference = SimpleNamespace(grid=grid, time_s=grid / 50.0)
+
+    on_track = LiveSample(
+        distance_m=template.start_m, time_s=10.0, speed_kmh=200.0,
+        throttle=1.0, brake=0.0, steering=0.0, in_pits=False,
+    )
+    into_the_pits = LiveSample(
+        distance_m=template.start_m + 40.0, time_s=11.0, speed_kmh=60.0,
+        throttle=0.0, brake=0.3, steering=0.0, in_pits=True,
+    )
+
+    live_main._drive(
+        [(on_track, 1), (into_the_pits, 1)],
+        buffer, watch, templates, reference, overlay, 0.0, None,
+    )
+
+    assert watch.why_silent is not None, "test setup is wrong"
+    assert overlay.deltas, "the panel should have been drawn at all"
+    assert overlay.deltas[0] is not None, "an on-track lap still gets its delta"
+    assert overlay.deltas[-1] is None, (
+        "the delta must go blank once the lap is known to be unusable"
+    )
 
 
 # -- precedence between a template's hold and a sentence --------------------

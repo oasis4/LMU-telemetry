@@ -54,6 +54,23 @@ class Reference:
     lap_number: int
     duration_s: float
     track: str
+    #: Who drove it, from the recording's own metadata. Defaulted so every
+    #: existing construction keeps working, but in practice always filled:
+    #: a folder can hold more than one driver's laps - this one holds two -
+    #: and "the quickest clean lap here" will pick the quicker driver every
+    #: time, silently. That is usually what is wanted and was never what was
+    #: said, and a driver who cannot see whose line they are chasing has no
+    #: way to tell a good reference from a wrong one.
+    driver: str = ""
+    #: The recording's own timestamp, verbatim, e.g.
+    #: ``2026-03-28T17_02_56Z``. Carried rather than re-read because the scan
+    #: has the metadata open anyway and the panel would otherwise have to
+    #: reopen the file to print a date.
+    recorded_at: str = ""
+    #: Fuel in the tank at the lap's start, in litres, or None where the
+    #: recording did not store the channel. Read for the chosen reference
+    #: only - see :func:`fuel_at_lap_start` - never during the scan.
+    fuel_l: "float | None" = None
 
     @property
     def label(self) -> str:
@@ -61,6 +78,103 @@ class Reference:
             f"{self.path.name} lap {self.lap_number} "
             f"({self.duration_s:.3f} s) at {self.track}"
         )
+
+
+def lap_time(seconds: float) -> str:
+    """A lap time as a driver reads one: ``1:50.700``, not ``110.700 s``."""
+    return f"{int(seconds // 60)}:{seconds % 60:06.3f}"
+
+
+def _short_date(recorded_at: str) -> str:
+    """``2026-03-28T17_02_56Z`` as ``28.03.26``, or "" if it is not a date.
+
+    Day first, because the driver reading it is German and the panel is the
+    one place in this package a date is read at a glance rather than sorted.
+    """
+    date = (recorded_at or "").split("T")[0]
+    parts = date.split("-")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        return ""
+    year, month, day = parts
+    return f"{day}.{month}.{year[-2:]}"
+
+
+def headline(reference: "Reference", contributing_laps: int = 1) -> str:
+    """One line naming the lap being measured against.
+
+    Who drove it, when, how much fuel it carried and what it took. The driver
+    asked for exactly these four after a session spent unable to tell whether
+    the reference was a team-mate's qualifying run or their own race lap -
+    the fuel load is what separates those two, and nothing on screen had ever
+    said. Anything the recording did not store is left out rather than shown
+    empty: a field reading "-" invites the driver to wonder what went wrong
+    with it mid-corner.
+
+    *contributing_laps* is how many distinct laps the strips were drawn from.
+    Said only when it is more than one, because "1 lap" is the ordinary case
+    and would just be noise on every line.
+    """
+    fields = [
+        reference.driver,
+        _short_date(reference.recorded_at),
+        "" if reference.fuel_l is None else f"{reference.fuel_l:.0f} L",
+        lap_time(reference.duration_s),
+    ]
+    if contributing_laps > 1:
+        fields.append(f"+{contributing_laps - 1} laps")
+    return "  ".join(field for field in fields if field)
+
+
+def describe(path: Path, lap_number: int, contributing_laps: int = 1) -> str:
+    """:func:`headline` for one recorded lap, read from the file itself.
+
+    Used for both ways a reference is arrived at - the automatic scan and an
+    explicit ``--reference`` - rather than formatting the scan's own
+    ``Reference`` in one case and something else in the other. The scan
+    already knows most of this and re-reading it costs one file open at
+    startup, against hundreds the scan has just done; one code path is worth
+    more than that, because two would let the panel describe the same lap
+    differently depending on how it was chosen.
+
+    Returns "" when the file or the lap cannot be read. The panel then shows
+    no reference line rather than a line saying nothing.
+    """
+    try:
+        with Session.open(path) as session:
+            lap = next((l for l in session.laps if l.number == lap_number), None)
+            if lap is None or lap.duration_s is None:
+                return ""
+            found = Reference(
+                path=path,
+                lap_number=lap.number,
+                duration_s=lap.duration_s,
+                track=session.info.track,
+                driver=session.info.driver,
+                recorded_at=session.info.recorded_at,
+                fuel_l=_fuel_at(session, lap),
+            )
+    except Exception:
+        return ""
+    return headline(found, contributing_laps)
+
+
+def _fuel_at(session: Session, lap) -> "float | None":
+    """Litres in the tank as *lap* began, or None if it was not recorded.
+
+    Read only for the lap actually chosen, never during
+    :func:`find_quickest_laps` - that opens every recording in the folder,
+    and materialising a channel per candidate lap to answer a question about
+    one of them would add seconds to a scan that already takes eight.
+
+    None covers the fixtures, which declare the channel without storing it,
+    as well as any recording that omits it. A missing fuel figure drops one
+    field off the line; it is not a reason to withhold the rest.
+    """
+    try:
+        litres = session.lap_channel(lap, "Fuel Level")
+    except Exception:
+        return None
+    return float(litres[0]) if len(litres) else None
 
 
 def normalise(name: str) -> str:
@@ -165,6 +279,8 @@ def find_quickest_laps(
                         lap_number=lap.number,
                         duration_s=lap.duration_s,
                         track=session.info.track,
+                        driver=session.info.driver,
+                        recorded_at=session.info.recorded_at,
                     ))
         except Exception:
             # Damaged, half-written, or not a recording at all. Skipping one

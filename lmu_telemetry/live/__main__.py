@@ -29,6 +29,7 @@ from ..core.trace import build_trace
 from ..recordings import default_recordings_dir
 from .buffer import LapBuffer
 from .overlay import POSITIONS
+from .reference import describe
 from .replay import replay
 from .template import TemplateWatch, best_templates, templates_for
 from .tone import play_brake_tone
@@ -399,6 +400,20 @@ def main(argv: "list[str] | None" = None) -> int:
     )
     templates = TemplateWatch(built, float(reference.grid[-1]) + GRID_STEP_M)
     print(f"templates: {templates_line}")
+
+    # Who drove the reference, when, on how much fuel, and what it took. The
+    # panel showed a delta against a lap it never named, and a folder of
+    # recordings can hold more than one driver - this one holds two, and the
+    # quicker driver's laps had been winning every time without anything
+    # saying so. Counted from the templates rather than passed down, so the
+    # "+n laps" can only ever match the strips actually built.
+    described = describe(
+        chosen, reference_lap.number,
+        contributing_laps=len({t.source for t in built if t.source}) or 1,
+    )
+    print(f"measured against: {described}")
+    if overlay is not None:
+        overlay.show_reference(described)
     drawn_at = 0.0
     on_lap = None
 
@@ -479,9 +494,15 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
         if overlay is not None and now - drawn_at >= 1.0 / REDRAW_HZ:
             drawn_at = now
             # Where the reference was in time when it reached here. Positive
-            # means this lap took longer to get to the same piece of track.
+            # means this lap took longer to get to the same piece of track -
+            # but only on a lap that is a lap. On one that used the pit lane
+            # the number keeps counting against a flying reference the driver
+            # is in no position to match, and the same guard that silences
+            # the strip and the sentences silences it here.
             was = float(np.interp(sample.distance_m, reference.grid, reference.time_s))
-            overlay.show_delta(sample.time_s - was)
+            overlay.show_delta(
+                None if watch.why_silent else sample.time_s - was
+            )
             _show_template(overlay, templates, buffer, watch, sample, now)
             overlay.pump()
 

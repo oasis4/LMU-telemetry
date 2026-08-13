@@ -191,3 +191,33 @@ def test_the_widget_order_is_the_same_whichever_was_shown_first(overlay):
     via_finding_only = _packed(overlay)
 
     assert via_template_first == via_finding_only == ["delta", "corner", "sentence"]
+
+
+def test_the_reference_line_sits_above_the_delta_and_stays_there(overlay):
+    """It names the lap the delta is measured against - who drove it, when,
+    on how much fuel, and what it took. Above the delta because it is what
+    the delta means, and permanent because that does not change while the
+    driver is out.
+
+    Pinned against the content arbitration, which is where a permanent
+    widget would be lost: this feature's own history has a regression in
+    exactly that layer, where packing order depended on which of two methods
+    had been called last.
+    """
+    overlay.show_reference("A Mueller  27.03.26  12 L  1:50.700")
+    assert overlay.reference.cget("text").startswith("A Mueller")
+
+    order = list(overlay.delta.master.pack_slaves())
+    assert order.index(overlay.reference) < order.index(overlay.delta)
+
+    for show in (
+        lambda: overlay.show_template(_showing(), own_brake=[], own_throttle=[]),
+        lambda: overlay.show_finding("T1", "You can brake later here"),
+        overlay.hide_template,
+        lambda: overlay.show_template(_showing(), own_brake=[], own_throttle=[]),
+    ):
+        show()
+        slaves = list(overlay.delta.master.pack_slaves())
+        assert overlay.reference in slaves, "the reference line was evicted"
+        assert slaves.index(overlay.reference) < slaves.index(overlay.delta)
+        assert overlay.reference.cget("text").startswith("A Mueller")
