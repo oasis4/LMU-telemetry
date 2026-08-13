@@ -18,6 +18,8 @@ from lmu_telemetry.core.session import Session
 from lmu_telemetry.core.track_model import build_track_model
 from lmu_telemetry.core.trace import build_trace
 from lmu_telemetry.live.template import (
+    LEAD_S,
+    MIN_LEAD_M,
     Template,
     best_templates,
     braking_events,
@@ -68,13 +70,217 @@ def test_a_corner_taken_flat_gets_no_template(monza):
             assert corner.index not in made
 
 
-def test_the_window_reaches_back_the_approach_distance(monza):
+def test_the_window_opens_the_same_lead_time_before_the_mark(monza):
+    """The fix itself. Before this, the window opened corner.start_m -
+    APPROACH_M and the warning it gave depended only on where the brake
+    point happened to fall inside that fixed 250 m span - measured on this
+    same fixture (see test_a_corner_whose_old_window_gave_zero_warning_now_
+    gets_some below), that ranged from 0 s to over 6 s of warning, corner to
+    corner, on one lap.
+
+    Measured as *elapsed time along the real trace* between the window's own
+    opening frame and the brake mark - by interpolating trace.time_s at both
+    ends, which is not how _window_start finds them (it indexes time_s and
+    counts grid steps). So this asks what a driver watching the clock would
+    actually see, rather than restating the implementation's own arithmetic
+    back at itself.
+
+    A tenth of a second of tolerance, not a third: the window can only open
+    on a grid point, so the achievable precision is one GRID_STEP_M of travel
+    - about 30 ms at 250 km/h, about 100 ms at 70 km/h through a chicane -
+    and this fixture's 8 events land between 1.948 s and 1.998 s. Anything
+    looser would have passed the bug this replaces at three of them.
+
+    None of this fixture's events trip the two guards below, which is what
+    makes a tight bound legitimate here; test_a_mark_inside_the_corner_keeps_
+    the_entry_in_the_window covers the case that deliberately overrides
+    LEAD_S.
+    """
     model, trace = monza
     for one in templates_for(trace, model.corners):
-        span = one.corner.end_m - one.corner.start_m
-        if span < 0:
-            span += trace.grid[-1]
-        assert one.length_m == pytest.approx(APPROACH_M + span, abs=4.0)
+        mark_index = int(np.searchsorted(one.offsets_m, one.brake_at_m))
+        mark_abs_m = one.abs_m[mark_index]
+        opens_at_s = float(np.interp(one.start_m, trace.grid, trace.time_s))
+        marks_at_s = float(np.interp(mark_abs_m, trace.grid, trace.time_s))
+        lead_s = marks_at_s - opens_at_s
+        assert lead_s == pytest.approx(LEAD_S, abs=0.1), (
+            f"{one.corner.name}: window opened {lead_s:.2f} s before its "
+            f"own mark, not the ~{LEAD_S} s every corner should agree on"
+        )
+
+
+def test_no_event_opens_with_zero_warning(monza):
+    """The complaint itself: Ascari 3 used to tell the driver to brake with
+    the mark already crossed. brake_at_m is exactly the window's own lead
+    distance (the offset from where it opens to the mark), so this is
+    checking there is always *some* strip ahead of the mark, whatever
+    guard ended up deciding how much."""
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        assert one.brake_at_m > 0.0, one.corner.name
+
+
+def test_a_corner_whose_old_window_gave_zero_warning_now_gets_some(monza):
+    """Not a hypothetical - Monza's own reference has one. Its last brake
+    application before the corner starts right where the old search span
+    (corner.start_m - APPROACH_M) stopped looking, which is also where the
+    old *display* window opened - so the old window put the brake mark on
+    its own first frame, the "0 m ahead" case in the driver's report.
+    Identified generically (whichever corner exhibits it in *this* fixture),
+    not by name, since it is a property of the reference's own braking, not
+    of one corner's label."""
+    model, trace = monza
+    lap_length_m = float(trace.grid[-1]) + GRID_STEP_M
+    events = braking_events(trace, model.corners)
+    culprits = []
+    for event in events:
+        figures = corner_metrics(trace, event)
+        if figures.brake_point_m is None:
+            continue
+        old_open = (event.start_m - APPROACH_M) % lap_length_m
+        old_warning = offset_into(old_open, figures.brake_point_m, lap_length_m)
+        if old_warning < GRID_STEP_M:
+            culprits.append(event)
+    assert culprits, (
+        "the fixture no longer has a corner whose old window gave (near) "
+        "zero warning - this test needs one to mean anything"
+    )
+
+    made = {one.corner.index: one for one in templates_for(trace, model.corners)}
+    for event in culprits:
+        assert made[event.index].brake_at_m > 50.0, (
+            f"{event.name} still opens with almost no warning"
+        )
+
+
+def test_the_window_still_ends_at_the_corners_own_end(monza):
+    """The one part of the old window this fix does not touch."""
+    model, trace = monza
+    for one in templates_for(trace, model.corners):
+        assert one.abs_m[-1] == pytest.approx(one.corner.end_m, abs=GRID_STEP_M)
+
+
+# -- the floor and the ceiling ------------------------------------------------
+#
+# Neither shows up in the Monza fixture as recorded, so both are built rather
+# than found, the same way test_template_from_is_none_for_a_lap_that_never_
+# brakes builds its own case below.
+#
+# What is rewritten is time_s - the clock _window_start actually reads - and
+# only over the approach strictly before the corner's own start. Not
+# speed_kmh: nothing downstream of the window derives from it, so a test that
+# moved it would pass whatever the window did. time_s must stay increasing
+# across the whole lap or every later distance reads as time travel, so these
+# rebuild it from its own steps rather than overwriting a slice in place.
+
+
+def _with_approach_pace(trace, event, step_s):
+    """*trace* with each grid step of *event*'s approach taking *step_s*.
+
+    Only the steps before the corner's own start are touched; the rest of the
+    lap keeps its own pace and is carried forward by the running total, so the
+    clock stays monotonic and the brake channel - and therefore the brake
+    point _brake_shape finds - is untouched.
+    """
+    lap_length_m = float(trace.grid[-1]) + GRID_STEP_M
+    approach = span_indices(
+        trace.grid, (event.start_m - APPROACH_M) % lap_length_m, event.start_m
+    )
+    approach = approach[trace.grid[approach] < event.start_m]
+    assert len(approach), "test setup needs an approach zone to re-pace"
+    steps = np.diff(trace.time_s, prepend=trace.time_s[0])
+    steps[approach] = step_s
+    return _replace(trace, time_s=np.cumsum(steps) + float(trace.time_s[0]))
+
+
+def test_a_very_low_speed_at_the_mark_still_gets_a_useful_window(monza):
+    """The floor: a brake point crawled up to. At 1 s per 2 m step - about
+    7 km/h - LEAD_S alone would open the window 4 m before the mark, which is
+    the mark and one sample either side, not a shape worth glancing at."""
+    model, trace = monza
+    event = braking_events(trace, model.corners)[0]
+
+    template = template_from(_with_approach_pace(trace, event, 1.0), event)
+    assert template is not None
+    assert template.brake_at_m == pytest.approx(MIN_LEAD_M, abs=GRID_STEP_M)
+
+
+def test_an_extreme_speed_at_the_mark_never_reaches_further_than_approach_m(monza):
+    """The ceiling: at 1 ms per 2 m step - about 7200 km/h - LEAD_S would ask
+    for two kilometres of lead. Built at a speed no real lap has, to show the
+    cap holds rather than assume it because nothing has tripped it: the strip
+    must never show track from further back than _brake_shape was allowed to
+    look for a brake point over."""
+    model, trace = monza
+    event = braking_events(trace, model.corners)[0]
+
+    template = template_from(_with_approach_pace(trace, event, 0.001), event)
+    assert template is not None
+    assert template.brake_at_m == pytest.approx(APPROACH_M, abs=GRID_STEP_M)
+
+
+def test_a_mark_inside_the_corner_keeps_the_entry_in_the_window(monza):
+    """The third guard, and the one that actually fires on real laps: 106 of
+    1705 events across the corpus are corners the reference trail-braked deep
+    enough that the brake mark sits *past* corner.start_m.
+
+    LEAD_S alone would then open the window after the corner had already
+    begun, and every offset in this module is measured forward from the
+    window's own start and wraps - so entry_at_m would come back as nearly a
+    whole lap instead of a small number, and the entry-speed readout would be
+    drawn off the end of the strip it belongs to. The window has to give way
+    and open at the corner's own start.
+
+    Built by re-pacing the stretch *inside* the corner, unlike the two above:
+    the guard needs the car to take longer than LEAD_S to get from the
+    corner's start to the mark, which is exactly what a slow corner entry is.
+    """
+    model, trace = monza
+    lap_length_m = float(trace.grid[-1]) + GRID_STEP_M
+
+    # Whichever event has the most room between its start and its apex - the
+    # mark has to land more than MIN_LEAD_M inside the corner, or the floor
+    # reaches back past the start on its own and the guard is never asked.
+    def apex_of(event):
+        inside = span_indices(trace.grid, event.start_m, event.end_m)
+        return int(np.argmin(trace.speed_kmh[inside]))
+
+    event = max(braking_events(trace, model.corners), key=apex_of)
+    inside = span_indices(trace.grid, event.start_m, event.end_m)
+    apex = apex_of(event)
+    mark = apex - 5
+    assert mark * GRID_STEP_M > MIN_LEAD_M + GRID_STEP_M, (
+        "test setup needs a corner whose apex is further in than the floor"
+    )
+
+    # One brake application there and nothing before it, so _brake_shape's
+    # mark lands inside the corner rather than on the real approach. It must
+    # sit before the apex, which is where that search stops.
+    brake = trace.brake.copy()
+    brake[span_indices(
+        trace.grid, (event.start_m - APPROACH_M) % lap_length_m, event.end_m
+    )] = 0.0
+    brake[inside[mark:apex]] = 0.8
+
+    # 0.2 s per 2 m step is about 36 km/h, so the stretch from the corner's
+    # start to that mark takes far longer than LEAD_S and a 2 s walk back
+    # from it cannot reach the start.
+    steps = np.diff(trace.time_s, prepend=trace.time_s[0])
+    steps[inside[:apex]] = 0.2
+    crawling = _replace(
+        trace, brake=brake,
+        time_s=np.cumsum(steps) + float(trace.time_s[0]),
+    )
+
+    template = template_from(crawling, event)
+    assert template is not None
+    assert template.brake_at_m > 0.0, "the mark must still be ahead on the strip"
+    assert template.entry_at_m == pytest.approx(0.0, abs=GRID_STEP_M), (
+        "the window should have opened at the corner's own start"
+    )
+    assert 0.0 <= template.entry_at_m <= template.length_m, (
+        "the entry wrapped out of its own window - the fault this guards"
+    )
 
 
 def test_the_brake_mark_sits_inside_the_window(monza):

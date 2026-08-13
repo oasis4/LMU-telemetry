@@ -71,10 +71,36 @@ Two strips under the delta figure, brake above and throttle below:
 - **A vertical mark** at the reference brake point.
 - **The entry-speed difference**, as text, once the corner's start is passed.
 
-The window is `corner.start_m - APPROACH_M` to `corner.end_m`. `APPROACH_M` is
-250 m and already exists — it is the span the brake point is searched over. The
-same number for both, so the strip shows the same brake point the sentence
-afterwards talks about.
+The window runs from `LEAD_S` (2.0 s) before the reference's own brake mark to
+`corner.end_m`, read off the reference lap's own clock.
+
+It shipped as `corner.start_m - APPROACH_M` instead, and that was a mistake.
+`APPROACH_M` is 250 m and already existed — it is the span the brake point is
+*searched* over, deliberately generous so the search never misses. Reused as
+the display window it meant the amount of warning a driver got depended only
+on where the brake point happened to fall inside that fixed span. Measured
+across 181 sessions and 1705 braking events, that ranged from 0 m to 600 m,
+and **170 events — one in ten — opened with the mark already under 2 m away**:
+the strip's first frame said brake now. The driver reported it as being told
+to brake while nowhere near the braking zone, and separately as not trusting
+the reference, which turned out to be the same fault seen twice.
+
+Time rather than distance, because the same 100 m is 1.4 s at Parabolica and
+4 s into a slow chicane, and notice is what the driver is actually reading.
+Off the clock rather than `LEAD_S × speed at the mark`, because that shortcut
+assumes the car held the mark's speed through the whole approach: measured the
+same way it ranged 1.45–5.82 s, worst wherever the approach is a hard
+acceleration out of a slow corner. The clock puts 94 % of events inside
+±0.1 s of 2.0 s.
+
+Two floors override it, both measured rather than assumed: a window never
+shorter than 40 m (12 events, all slow chicane halves), and a window that
+always contains the corner's own start (106 events, 6 %, where the reference
+trail-braked past `corner.start_m` — those get a longer window than `LEAD_S`
+asks for, because an entry outside its own strip is the worse failure).
+
+`APPROACH_M` itself is unchanged, so the strip still shows the same brake
+point the sentence afterwards talks about.
 
 The vertical scale is fixed at 0 to 100 % and never auto-scaled. Auto-scaling
 would draw a 60 % brake application and a 90 % one at the same height, which

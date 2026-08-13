@@ -114,6 +114,95 @@ def braking_events(reference: LapTrace, corners) -> "list[Corner]":
     return events
 
 
+#: How long before the reference's own brake mark the window opens, in
+#: seconds of the reference's own travel - not metres, because a fixed metre
+#: span does not mean a fixed warning: the same 100 m is 1.4 s at Parabolica's
+#: approach speed and 4 s into a slow chicane, so a driver reading the strip
+#: gets a wildly different amount of notice corner to corner even though the
+#: strip itself looks the same. Time is what the driver actually experiences,
+#: so it is what every corner is given equally of.
+#:
+#: Read straight off the lap's own clock - see :func:`_window_start` - not by
+#: multiplying LEAD_S by the speed *at* the mark. That shortcut looks
+#: equivalent and is not: it assumes the car held the mark's speed through the
+#: whole approach, and where the approach is a hard acceleration out of a slow
+#: corner it is wrong in the same direction as the fault being fixed. Both
+#: were measured on a 181-session, 1705-event corpus - the shortcut ranged
+#: 1.45 s to 5.82 s with 85 % of events inside +-0.3 s; the clock puts 94 % of
+#: them inside +-0.1 s, and every event that is not is one of the two guards
+#: below deliberately overriding it.
+#:
+#: What it replaces: ``corner.start_m - APPROACH_M``, the brake-point *search*
+#: span used as the display window by mistake. Across the same corpus that
+#: gave the driver between 0 m and 600 m of warning depending only on where
+#: each brake point happened to fall inside the fixed span - and **170 of the
+#: 1705 events, one in ten, opened with the mark already under 2 m away**: the
+#: strip's first frame said brake now. A driver reported it as being told to
+#: brake while nowhere near the braking zone.
+#:
+#: Two seconds on the Monza reference in ``tests/fixtures/monza_q_3laps.duckdb``
+#: is 42-146 m across its 8 braking events - 42 m into the slow half of the
+#: T1/T2 chicane, 146 m into T1 itself at 266 km/h. Same warning either way,
+#: which is the point: a fixed distance is a different amount of notice at
+#: every corner, and notice is what the driver is actually reading.
+LEAD_S = 2.0
+
+#: Floor under the lead distance, so a brake point taken at a crawl still
+#: opens a window with a shape worth glancing at rather than the mark and a
+#: handful of samples. LEAD_S stops being enough on its own below 72 km/h
+#: (2.0 s * 20 m/s = 40 m).
+#:
+#: Not hypothetical: 12 of the same corpus scan's 1705 events reach it, all
+#: of them the slow second half of a chicane taken at 60-70 km/h - Monza's
+#: Variante del Rettifilo 2 among them. Rare, but the case it rescues is a
+#: strip with almost nothing on it, which is worse than no strip.
+MIN_LEAD_M = 40.0
+
+#: Ceiling on the same distance. Nothing in this speed range asks for it -
+#: 2.0 s would need upward of 450 km/h to reach 250 m - but the display must
+#: never claim to show track further back than ``_brake_shape`` was allowed to
+#: search over, because beyond that boundary "the brake point" is not a
+#: measured fact about the lap, only an artefact of how far the window reached.
+#: Tied to APPROACH_M rather than restated, so the two cannot drift apart.
+MAX_LEAD_M = APPROACH_M
+
+
+def _window_start(trace: LapTrace, brake_point_m: float) -> float:
+    """Where the strip opens: :data:`LEAD_S` seconds before *brake_point_m*.
+
+    Read off ``trace.time_s`` - the clock the lap was actually driven to -
+    rather than converting LEAD_S into metres at some single speed and
+    stepping back that far. A single speed has to be *some* speed, and every
+    choice of one is wrong wherever the approach is not steady: taken at the
+    mark, it treats a hard acceleration out of the previous corner as though
+    the car had been at the mark's speed all along, which opens the strip
+    nearly six seconds early at Sarthe's Ford chicanes. That is the same
+    complaint this change exists to answer, in a smaller size, and no amount
+    of picking a better single speed removes it.
+
+    The window may open before the start/finish line, for a corner early
+    enough in the lap - Spa's T1 does. A single-lap trace does not hold those
+    metres, so they are read off this same lap's own tail: the car's line and
+    speed at 5700 m on this lap is the closest thing there is to its line and
+    speed at 5700 m on the lap before.
+
+    Returns a grid value, so the window starts exactly on a sample and
+    ``offsets_m[0]`` is exactly 0.0.
+    """
+    grid, time_s = trace.grid, trace.time_s
+    count = len(grid)
+    mark_i = min(int(np.searchsorted(grid, brake_point_m)), count - 1)
+
+    opens_at_s = float(time_s[mark_i]) - LEAD_S
+    if opens_at_s < time_s[0]:
+        opens_at_s += float(time_s[-1] - time_s[0])    # round the loop
+    steps = (mark_i - int(np.searchsorted(time_s, opens_at_s))) % count
+
+    steps = min(max(steps, int(MIN_LEAD_M // GRID_STEP_M)),
+                int(MAX_LEAD_M // GRID_STEP_M), count - 1)
+    return float(grid[(mark_i - steps) % count])
+
+
 def template_from(trace: LapTrace, event: Corner) -> "Template | None":
     """Fill one braking event's window from one lap, or None if it did not
     brake there.
@@ -142,7 +231,48 @@ def template_from(trace: LapTrace, event: Corner) -> "Template | None":
     if figures.brake_point_m is None:
         return None
 
-    start_m = (event.start_m - APPROACH_M) % lap_length_m
+    # The display window is LEAD_S seconds of the reference's own travel
+    # before its brake mark - not APPROACH_M, which is how far back the
+    # search for that mark was allowed to look, not how far back it makes
+    # sense to *show*. Using the search span as the display window is the
+    # fault this replaces: a fixed 250 m before corner.start_m puts the mark
+    # wherever inside that span the braking happened to fall, from right at
+    # the corner (0 m of warning) to nearly the full 250 m, and the driver
+    # reading the strip has no way to know which lap they are getting.
+    start_m = _window_start(trace, figures.brake_point_m)
+
+    # Guard: the window must never open after the corner's own start. Every
+    # distance in this module downstream of *start_m* is read through
+    # offset_into, which measures forward from *start_m* and wraps - so if
+    # the brake point sits close enough past event.start_m that lead_m does
+    # not reach back far enough to clear it (trail braking deeper into the
+    # corner than the lead distance), start_m lands *after* event.start_m,
+    # and entry_at_m below would wrap almost a full lap instead of reading as
+    # a small offset near the window's own start.
+    #
+    # Checked with offset_into itself, the same tool it would otherwise fool:
+    # a good start_m always has event.start_m reachable within the window's
+    # own span (offset_into(start_m, event.start_m, ...) no further out than
+    # offset_into(start_m, event.end_m, ...)); a start_m that landed past
+    # event.start_m instead puts it almost a lap out - past the window's own
+    # far edge, not inside it - which is exactly what distinguishes the bad
+    # case from the good one. When that happens the window opens at the
+    # corner's own start instead.
+    #
+    # This fires, and not rarely: 106 of the corpus scan's 1705 events, 6 %,
+    # are corners the reference trail-braked deep enough that _brake_shape's
+    # mark sits past corner.start_m - Paul Ricard's T13 and T11-T12 among
+    # them. Those events get a window longer than LEAD_S asks for, up to
+    # 5.8 s at Sarthe's Ford chicanes, and that is the intended trade: a
+    # window that opened LEAD_S before a mark inside the corner would begin
+    # after the corner already had, leaving entry_at_m and the entry-speed
+    # readout pointing outside the strip they are drawn on. Containing the
+    # corner is the harder requirement; the lead time yields to it.
+    entry_candidate = offset_into(start_m, event.start_m, lap_length_m)
+    span_candidate = offset_into(start_m, event.end_m, lap_length_m)
+    if entry_candidate > span_candidate:
+        start_m = event.start_m
+
     window = span_indices(trace.grid, start_m, event.end_m)
     if len(window) < 2:
         return None
@@ -290,14 +420,22 @@ class TemplateWatch:
         recently win, the same tie-break this used unconditionally before.
 
         That "most recently opened" rule alone is what let the panel and the
-        tone name different corners at Monza's T1/T2: T2's window opens 68 m
-        before T1's own brake point, so "most recently opened" swapped the
-        strip to T2 while T1's brake point was still 68 m away, and the tone
-        - which scanned for a passed brake point on its own - fired for T1
-        into a panel already showing T2. Picking the soonest still-ahead
-        brake point instead keeps T1 on screen right through the frame its
-        own mark is crossed, so a tone built on *this* method's answer can no
-        longer disagree with what is drawn.
+        tone name different corners. It was found at Monza's T1/T2, back when
+        every window opened a fixed 250 m before its corner: T2's opened 68 m
+        before T1's own brake point, so the strip swapped to T2 while T1's
+        mark was still 68 m away, and the tone - which scanned for a passed
+        brake point on its own - fired for T1 into a panel already showing
+        T2. Picking the soonest still-ahead brake point instead keeps T1 on
+        screen right through the frame its own mark is crossed, so a tone
+        built on *this* method's answer can no longer disagree with what is
+        drawn.
+
+        :data:`LEAD_S` has since shortened every window, and Monza's T1/T2 no
+        longer overlap that way - T2 now opens well past T1's mark. The
+        arrangement did not go away, it moved: on the same lap T10's window
+        opens 94 m before T8-T9's mark. Naming both pairs because a reader
+        checking only the first would find nothing wrong there and conclude
+        this arbitration was dead weight.
         """
         ahead: "tuple[Template, float] | None" = None
         ahead_remaining = None
@@ -345,9 +483,11 @@ class TemplateWatch:
         the one the strip is showing: before this, the two ran independent
         searches - :meth:`showing` picked nearest-window for *display*,
         this scanned for a passed brake point for the *tone* - and nothing
-        tied their answers together. At Monza's T1/T2, where the windows
-        overlap, that let the tone fire for T1 while the panel had already
-        switched to T2. Routing through :meth:`showing` makes the two
+        tied their answers together. Where two windows overlap, that let the
+        tone fire for the earlier corner while the panel had already switched
+        to the later one - found at Monza's T1/T2, and since :data:`LEAD_S`
+        shortened the windows it is that lap's T8-T9 and T10 that sit that
+        way. Routing through :meth:`showing` makes the two
         structurally unable to disagree, rather than agreeing only because
         both searches happened to land on the same corner.
 
