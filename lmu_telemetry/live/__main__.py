@@ -134,6 +134,22 @@ def _choose_templates(auto_found, recordings: Path, live, reference, model):
         if got is not None:
             sources.append(got)
 
+    if not sources:
+        # A contradiction, not a quiet shortfall: find_reference *is*
+        # find_quickest_laps(keep=1), so a scan that finds nothing where a
+        # reference was just found means the two scans were asked different
+        # questions - the game's answer changed underneath them. That is what
+        # a stale mapping looks like from in here, and it went out as an
+        # unremarkable "from 0 laps" while the driver was coached against the
+        # circuit they had been on before this one.
+        print(
+            f"no laps matched {auto_found.track} on this layout and class, "
+            f"yet a reference was found there moments ago. The game's answer "
+            f"changed while the recordings were being read - most likely a "
+            f"session loaded, and the reference belongs to the previous one.",
+            file=sys.stderr,
+        )
+
     made = best_templates(reference, sources, model.corners)
     # Empty-string sources are best_templates' own reference fallback, not a
     # lap from the pool - counting them would claim a "different lap
@@ -418,7 +434,21 @@ def main(argv: "list[str] | None" = None) -> int:
     on_lap = None
 
     try:
-        _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_lap)
+        _drive(
+            source, buffer, watch, templates, reference, overlay, drawn_at,
+            on_lap,
+            # Only for an automatic reference. With --reference the driver
+            # named a lap and meant it; re-deciding whether it belongs to
+            # the circuit they are on is not this loop's business.
+            live=live if auto_found is not None else None,
+            expect_track=auto_found.track if auto_found is not None else "",
+            # The reference recording's own measured length, not a fresh read
+            # of the game's. A fresh read taken here would be taken *after*
+            # the scan - so if the session loaded during it, the expectation
+            # would be set to the new circuit and the check would agree with
+            # whatever it was meant to catch.
+            expect_length_m=model.track_length_m,
+        )
     except KeyboardInterrupt:
         # Reading the game runs until stopped, and the way it is stopped is
         # Ctrl-C. A traceback there reads as a fault when it is the exit.
@@ -429,7 +459,53 @@ def main(argv: "list[str] | None" = None) -> int:
     return 0
 
 
-def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_lap) -> None:
+#: How often the loaded circuit is re-read while driving. Once a second: the
+#: read is a full copy of the shared-memory block, which is not free at 50 Hz,
+#: and a circuit change is a thing that happens between sessions rather than
+#: between corners.
+TRACK_RECHECK_S = 1.0
+
+
+def _circuit_changed(live, expect_track: str, expect_length_m) -> "str | None":
+    """What the game now says, if that is a different circuit from *expect*.
+
+    The reference is chosen once, from a single read taken before the session
+    - which is the whole point, it is what lets the overlay be started first.
+    The cost is that the read can be of the *previous* session: the mapping
+    holds the last circuit's scoring until a new one loads, so a tool started
+    while the driver is still in the menus locks onto wherever they were
+    before. A driver reported exactly that, coached against Daytona for a
+    whole run on another track.
+
+    Nothing here can be answered at startup, because at startup the stale
+    answer is the only answer there is. It can only be caught afterwards, by
+    asking again once the game has had time to load - which is why this is
+    checked while driving rather than once more before the first lap.
+
+    Length as well as name, for the reason :data:`reference.LAYOUT_TOLERANCE_M`
+    exists: two layouts of one circuit report one name.
+    """
+    if live is None or not hasattr(live, "track_name"):
+        return None
+    from .reference import same_layout, same_track
+
+    now_track = live.track_name()
+    if not now_track:
+        # Between sessions the mapping can go quiet. That is not a different
+        # circuit, and treating it as one would stop the tool every time the
+        # driver looked at a menu.
+        return None
+    if not same_track(now_track, expect_track):
+        return now_track
+    now_length = live.track_length_m() if hasattr(live, "track_length_m") else None
+    if now_length and not same_layout(now_length, expect_length_m):
+        return f"{now_track} ({now_length / 1000:.3f} km)"
+    return None
+
+
+def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_lap,
+           live=None, expect_track: str = "", expect_length_m=None) -> None:
+    checked_at = 0.0
     for sample, lap in source:
         if lap != on_lap:
             # A new lap. The buffer and the watch both start again; the watch
@@ -462,6 +538,24 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
         # or the display it arbitrates could answer differently a few
         # microseconds apart for no reason but the clock having moved.
         now = time.perf_counter()
+
+        # Before anything is said about this sample. Coaching against the
+        # wrong circuit is worse than not coaching, and every line below
+        # this point is a claim about a track the driver may not be on.
+        if expect_track and now - checked_at >= TRACK_RECHECK_S:
+            checked_at = now
+            elsewhere = _circuit_changed(live, expect_track, expect_length_m)
+            if elsewhere is not None:
+                print(
+                    f"\nthe game is now on {elsewhere}, not {expect_track}.\n"
+                    f"the reference was picked for {expect_track} and is no "
+                    f"longer about the track being driven - stopping rather "
+                    f"than coaching against the wrong circuit.\n"
+                    f"start the overlay again now the session is loaded.",
+                    file=sys.stderr,
+                )
+                return
+
         _sound_if_due(templates, buffer, watch, sample, now)
 
         for finding in watch.advance(buffer):

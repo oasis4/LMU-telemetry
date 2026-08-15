@@ -528,3 +528,110 @@ def test_the_lead_is_measured_in_time_so_a_slower_car_gets_a_shorter_one(monkeyp
     # the grid can resolve.
     for speed_kmh, got in ((280.0, fast), (90.0, slow)):
         assert got == pytest.approx(TONE_LEAD_S * speed_kmh / 3.6, abs=2.5)
+
+
+# -- the circuit changing underneath the reference ----------------------------
+#
+# The reference is chosen once, before the session, from a single read of the
+# game. That read can be of the *previous* session: the mapping holds the last
+# circuit's scoring until a new one loads. A driver reported being coached
+# against Daytona for a whole run on another track, having driven Daytona
+# before it - and the run's own output carried the contradiction that proves
+# it, "5 braking events from 0 laps", printed without comment.
+
+
+class _FakeGame:
+    """Reports one circuit, then another from the nth call onward."""
+
+    def __init__(self, first, then=None, after=0, length_m=5734.0,
+                 then_length_m=5776.0):
+        self._first, self._then, self._left = first, then, after
+        self._length, self._then_length = length_m, then_length_m
+        self.calls = 0
+
+    def _switched(self) -> bool:
+        return self._then is not None and self.calls > self._left
+
+    def track_name(self) -> str:
+        self.calls += 1
+        return self._then if self._switched() else self._first
+
+    def track_length_m(self) -> float:
+        return self._then_length if self._switched() else self._length
+
+
+DAYTONA = "Daytona International Speedway Road Course"
+
+
+def test_a_circuit_that_never_changes_is_never_complained_about():
+    game = _FakeGame(DAYTONA)
+    assert live_main._circuit_changed(game, DAYTONA, 5734.0) is None
+
+
+def test_the_game_going_quiet_is_not_a_different_circuit():
+    """Between sessions the mapping can report nothing at all. Treating that
+    as a change would stop the tool every time the driver opened a menu."""
+    assert live_main._circuit_changed(_FakeGame(""), DAYTONA, 5734.0) is None
+
+
+def test_another_circuit_is_reported():
+    game = _FakeGame(DAYTONA, then="Autodromo Nazionale Monza", after=0)
+    assert live_main._circuit_changed(game, DAYTONA, 5734.0) == (
+        "Autodromo Nazionale Monza"
+    )
+
+
+def test_another_layout_of_the_same_circuit_is_reported_too():
+    """One name, two courses - the fault LAYOUT_TOLERANCE_M exists for. The
+    name alone would say nothing had changed."""
+    game = _FakeGame("Autodromo Nazionale Monza", then="Autodromo Nazionale Monza",
+                     after=0, length_m=5776.0, then_length_m=5741.0)
+    assert live_main._circuit_changed(
+        game, "Autodromo Nazionale Monza", 5776.0
+    ) is not None
+
+
+def test_driving_stops_when_the_circuit_turns_out_to_be_another_one(monkeypatch):
+    """The whole point: coaching against the wrong circuit is worse than not
+    coaching, so the loop gives up rather than going on."""
+    ticks = iter([100.0 + i for i in range(20)])
+    monkeypatch.setattr(live_main.time, "perf_counter", lambda: next(ticks))
+
+    template = _template_at()
+    templates = TemplateWatch([template], LAP)
+    buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+    watch = _FakeCornerWatch()
+    overlay = _FakeOverlay()
+    grid = np.arange(0.0, LAP, 2.0)
+    reference = SimpleNamespace(grid=grid, time_s=grid / 50.0)
+    game = _FakeGame(DAYTONA, then="Autodromo Nazionale Monza", after=1)
+
+    # Counted as they are pulled, rather than inferred from how much the
+    # overlay was told: the redraw is throttled, so a delta count would say
+    # as much about the clock as about whether the loop gave up.
+    taken = []
+
+    def feed():
+        for d in (700.0, 720.0, 740.0, 760.0):
+            taken.append(d)
+            yield LiveSample(
+                distance_m=d, time_s=d / 50.0, speed_kmh=180.0,
+                throttle=1.0, brake=0.0, steering=0.0, in_pits=False,
+            ), 1
+
+    live_main._drive(
+        feed(), buffer, watch, templates, reference, overlay, 0.0, None,
+        live=game, expect_track=DAYTONA, expect_length_m=5734.0,
+    )
+
+    assert game.calls >= 2, "the circuit should be re-read while driving"
+    assert len(taken) < 4, (
+        f"the loop worked through all {len(taken)} samples instead of giving "
+        f"up when the circuit changed"
+    )
+
+
+def test_an_explicit_reference_is_never_second_guessed():
+    """--reference means the driver named a lap and meant it. Nothing here
+    re-decides whether it belongs to the circuit they are on."""
+    assert live_main._circuit_changed(None, DAYTONA, 5734.0) is None
