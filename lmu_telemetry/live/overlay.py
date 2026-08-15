@@ -177,8 +177,14 @@ class Overlay:
         )
         self.reference.pack(anchor="w")
 
+        # Deliberately no longer the biggest thing on the card. It was set at
+        # 38 when it was the panel's whole output; the strip is what the
+        # driver acts on now, and the delta is the score afterwards. Still the
+        # largest text, because the coloured rail beside it is read
+        # peripherally and the number should be legible when the eye follows
+        # it - just no longer shouting over the trace it sits above.
         self.delta = tk.Label(
-            card, text="--.---", font=("Consolas", max(18, int(38 * k)), "bold"),
+            card, text="--.---", font=("Consolas", max(13, int(24 * k)), "bold"),
             fg=NEUTRAL, bg=CARD, anchor="w", width=0,
         )
         self.delta.pack(anchor="w")
@@ -388,13 +394,31 @@ class Overlay:
         return True
 
     def show_finding(self, name: str, sentence: str | None) -> None:
-        """A corner just completed.
+        """A line of text in the slot below the delta.
 
-        ``None`` means its measurements did not agree on a story, and the panel
-        then shows nothing at all rather than the corner's name over an empty
-        line. Silence is the post-lap view's answer too, and a driver glancing
-        at a name with no advice under it would read it as a tip that failed to
-        arrive.
+        **Only the pit-lane notice reaches this now.** It was built for the
+        per-corner coaching sentences, and those no longer go on the panel:
+        the driver's verdict was that a sentence naming what went wrong,
+        arriving on the straight after the corner, is a diagnosis rather than
+        a handgrip, and that once the strip showed the reference's own pedal
+        trace against theirs the sentence was one more thing moving in the
+        corner of the eye. They are still printed - see ``_drive`` - where
+        they are read after the session rather than during it.
+
+        That makes the precedence rules below currently unreachable: the one
+        remaining caller fires exactly when ``watch.why_silent`` is set, and
+        ``_show_template`` withholds every strip while it is. A template and
+        a finding can no longer be up for the same slot at all. Kept rather
+        than unwound because what they encode was expensive to find - a fix
+        round in this feature's history dropped the sentence for 8 of 11
+        corners at Monza by getting this order wrong - and because putting
+        the sentences back behind a flag would need it again.
+
+        ``None`` means the measurements did not agree on a story, and the
+        panel then shows nothing at all rather than a name over an empty
+        line. Silence is the post-lap view's answer too, and a driver
+        glancing at a name with no advice under it would read it as a tip
+        that failed to arrive.
 
         Always wins the content slot the instant this is called, even over a
         template that is currently up: the corner that just finished is the

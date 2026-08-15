@@ -32,7 +32,7 @@ from .overlay import POSITIONS
 from .reference import describe
 from .replay import replay
 from .template import TemplateWatch, best_templates, templates_for
-from .tone import play_brake_tone
+from .tone import TONE_LEAD_S, play_brake_tone
 from .watch import CornerWatch
 
 #: The panel is read by a driver, not sampled by an instrument. Redrawing at
@@ -479,13 +479,18 @@ def _drive(source, buffer, watch, templates, reference, overlay, drawn_at, on_la
                 said = "- (same braking as an earlier corner)"
             else:
                 said = "-"
+            # Printed, not put on the panel. The sentences were what this
+            # tool had instead of a brake template, and the driver's verdict
+            # on them was that they named what went wrong without saying what
+            # to do - a diagnosis, not a handgrip. Now that the strip shows
+            # the reference's own pedal trace against theirs, the sentence
+            # arriving on the straight afterwards is one more thing moving in
+            # the corner of the eye, for information the strip already gave
+            # while it could still be used. They still belong here, where
+            # they are read after the session rather than during it.
             print(
                 f"  {corner.name:28s} {finding.comparison.lost_s:+.3f} s  {said}"
             )
-            if overlay is not None:
-                overlay.show_finding(
-                    corner.name, tip.headline if tip else finding.praise
-                )
 
         # Paced on the wall clock, not on lap time: lap time restarts at every
         # line, and a replay running at 40x would redraw 40 times as often as
@@ -628,7 +633,11 @@ def _sound_if_due(templates, buffer, watch, sample, now: float) -> None:
     later than a sample: it runs off ``showing()`` every sample, not off the
     15 Hz redraw ``_show_template`` is throttled to.
     """
-    template = templates.due_template(sample.distance_m, now)
+    # Held against the driver's own speed, not the reference's: it is their
+    # reaction the lead exists for, and on a slow lap the same lead in
+    # seconds is correctly a shorter distance. See tone.TONE_LEAD_S.
+    lead_m = TONE_LEAD_S * max(sample.speed_kmh, 0.0) / 3.6
+    template = templates.due_template(sample.distance_m, now, lead_m)
     if template is None:
         return
     if watch.why_silent is not None:

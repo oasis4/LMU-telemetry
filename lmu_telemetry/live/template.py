@@ -474,9 +474,27 @@ class TemplateWatch:
                 held_last, held = last, Showing(template, template.length_m, past_corner=True)
         return held
 
-    def due_template(self, distance_m: float, now: float) -> "Template | None":
-        """The template whose brake mark has just been passed, if any - and
-        only if it is the one currently on screen.
+    def due_template(
+        self, distance_m: float, now: float, lead_m: float = 0.0
+    ) -> "Template | None":
+        """The template whose brake mark is *lead_m* or less ahead, if any -
+        and only if it is the one currently on screen.
+
+        *lead_m* is how far before the mark the answer is wanted, and exists
+        because a cue delivered at the instant the action is due cannot be
+        acted on: see ``live.tone.TONE_LEAD_S``, which is where the number
+        comes from and why. Zero by default, which is the plain "has the mark
+        been reached" question this asked before the lead existed - kept as
+        the default so a caller that wants the mark itself, and every test
+        written against it, still gets exactly that.
+
+        Bringing the answer forward cannot make the tone name a corner the
+        strip is not showing, which is the property the whole method is built
+        to hold. At *lead_m* before its own mark a window's brake point is
+        still ahead of the car, so it is still a candidate for :meth:`showing`
+        by the soonest-still-ahead rule below; it loses only to a window whose
+        own mark is nearer still, which is the corner that should be toning
+        anyway.
 
         Built on :meth:`showing` rather than its own scan of
         ``self.templates``, so the tone can never name a corner other than
@@ -521,7 +539,11 @@ class TemplateWatch:
         if showing is None or showing.past_corner:
             return None
         template = showing.template
-        if showing.at_m < template.brake_at_m:
+        # Never before the window's own start: a lead longer than the mark is
+        # deep into the window would otherwise arm the tone on the first frame
+        # the strip appears, which is a beep for a corner the driver has not
+        # begun to approach.
+        if showing.at_m < max(0.0, template.brake_at_m - lead_m):
             return None
         if template.corner.index in self._toned:
             return None
@@ -531,9 +553,11 @@ class TemplateWatch:
         """Record that *template*'s tone has sounded, so it does not again."""
         self._toned.add(template.corner.index)
 
-    def tone_due(self, distance_m: float, now: float) -> bool:
-        """True exactly once per corner, as the reference brake point passes
-        while that corner is the one on screen.
+    def tone_due(
+        self, distance_m: float, now: float, lead_m: float = 0.0
+    ) -> bool:
+        """True exactly once per corner, *lead_m* before the reference brake
+        point, while that corner is the one on screen.
 
         Built on :meth:`due_template` and :meth:`mark_toned` rather than its
         own loop, so there is one place that decides which template a
@@ -541,7 +565,7 @@ class TemplateWatch:
         :meth:`showing` does now that this is built on it - the display
         arbitration needs to know how long ago a window was last entered.
         """
-        template = self.due_template(distance_m, now)
+        template = self.due_template(distance_m, now, lead_m)
         if template is None:
             return False
         self.mark_toned(template)

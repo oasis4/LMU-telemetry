@@ -23,6 +23,7 @@ from lmu_telemetry.core.metrics import APPROACH_M
 from lmu_telemetry.live.__main__ import _show_template, _sound_if_due
 from lmu_telemetry.live.buffer import LapBuffer, LiveSample
 from lmu_telemetry.live.template import Template, TemplateWatch
+from lmu_telemetry.live.tone import TONE_LEAD_S
 
 LAP = 6000.0
 
@@ -101,12 +102,18 @@ def _template_at(corner_start_m: float = 950.0, corner_end_m: float = 1100.0) ->
     )
 
 
-def _feed(buffer: LapBuffer, distances) -> LiveSample:
-    """Add one real sample per distance and return the last one added."""
+def _feed(buffer: LapBuffer, distances, speed_kmh: float = 200.0) -> LiveSample:
+    """Add one real sample per distance and return the last one added.
+
+    *speed_kmh* matters to the tone: its lead is held in seconds of the
+    driver's own travel, so how far before the mark it fires is a function of
+    this. Defaulted, because every test written before that existed neither
+    knew nor cared.
+    """
     last = None
     for i, d in enumerate(distances):
         last = LiveSample(
-            distance_m=float(d), time_s=i * 0.02, speed_kmh=200.0,
+            distance_m=float(d), time_s=i * 0.02, speed_kmh=speed_kmh,
             throttle=0.4, brake=0.6, steering=0.0,
         )
         buffer.add(last)
@@ -451,3 +458,73 @@ def test_the_entry_delta_appears_only_after_the_corners_start_is_passed():
     _showing2, _brake2, _throttle2, entry_delta2 = overlay.shown
     assert entry_delta2 is not None
     assert isinstance(entry_delta2, float)
+
+
+def test_the_tone_sounds_before_the_mark_not_on_it(monkeypatch):
+    """The driver reported the beep arriving too late, and it was: it fired
+    at the mark, and simple auditory reaction time plus a throttle-to-brake
+    move is 200-250 ms, so the pedal went down 15-20 m past it at speed.
+
+    Asserted as a distance before the mark, from the driver's own speed -
+    that is what TONE_LEAD_S buys and what a fixed metre count would not.
+    """
+    template = _template_at()
+    templates = TemplateWatch([template], LAP)
+    buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+    watch = _FakeWatch()
+
+    sounded = []
+    monkeypatch.setattr(live_main, "play_brake_tone", lambda: sounded.append(True))
+
+    speed_kmh = 250.0
+    lead_m = TONE_LEAD_S * speed_kmh / 3.6
+    assert lead_m > 4.0, "test setup: the lead must be worth measuring"
+
+    # Just before the lead point: still nothing.
+    early = template.start_m + template.brake_at_m - lead_m - 6.0
+    sample = _feed(buffer, np.arange(template.start_m, early + 2.0, 2.0),
+                   speed_kmh=speed_kmh)
+    _sound_if_due(templates, buffer, watch, sample, now=0.0)
+    assert sounded == [], "the tone must not sound a whole lead early"
+
+    # Past it, but still short of the mark itself.
+    at_lead = template.start_m + template.brake_at_m - lead_m + 2.0
+    sample = _feed(buffer, np.arange(early + 2.0, at_lead + 2.0, 2.0),
+                   speed_kmh=speed_kmh)
+    assert sample.distance_m < template.start_m + template.brake_at_m, (
+        "test setup: this sample must still be short of the mark"
+    )
+    _sound_if_due(templates, buffer, watch, sample, now=0.0)
+    assert sounded == [True], "the tone should already have sounded by here"
+
+
+def test_the_lead_is_measured_in_time_so_a_slower_car_gets_a_shorter_one(monkeypatch):
+    """A fixed distance would be the wrong amount of warning at every speed
+    but one - the same reason the window itself is timed."""
+    def fires_at(speed_kmh: float) -> float:
+        """How far before the mark the tone sounds, at a steady *speed_kmh*."""
+        template = _template_at()
+        templates = TemplateWatch([template], LAP)
+        buffer = LapBuffer(np.arange(0.0, LAP, 2.0))
+        watch = _FakeWatch()
+        sounded: "list[bool]" = []
+        monkeypatch.setattr(
+            live_main, "play_brake_tone", lambda: sounded.append(True)
+        )
+        mark_m = template.start_m + template.brake_at_m
+        for upto in np.arange(template.start_m, mark_m + 2.0, 2.0):
+            sample = _feed(buffer, [upto], speed_kmh=speed_kmh)
+            _sound_if_due(templates, buffer, watch, sample, now=0.0)
+            if sounded:
+                return mark_m - float(upto)
+        raise AssertionError(f"the tone never sounded at {speed_kmh} km/h")
+
+    fast, slow = fires_at(280.0), fires_at(90.0)
+    assert fast > slow, (
+        f"the faster car should be warned from further out, got {fast:.0f} m "
+        f"at 280 km/h against {slow:.0f} m at 90 km/h"
+    )
+    # Both should be about TONE_LEAD_S of their own travel, within the 2 m
+    # the grid can resolve.
+    for speed_kmh, got in ((280.0, fast), (90.0, slow)):
+        assert got == pytest.approx(TONE_LEAD_S * speed_kmh / 3.6, abs=2.5)
