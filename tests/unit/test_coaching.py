@@ -40,6 +40,36 @@ def _index(distance_m: float) -> int:
     return int(distance_m / GRID_STEP_M)
 
 
+def _trail_brake(start_m, peak_m, release_m):
+    """Pressure up at *start_m*, highest at *peak_m*, bled off by *release_m*."""
+    brake = np.zeros(len(grid_for(LAP_M)))
+    brake[_index(start_m) : _index(peak_m)] = 0.6
+    brake[_index(peak_m)] = 1.0
+    taper = np.linspace(1.0, 0.0, _index(release_m) - _index(peak_m) + 2)[1:-1]
+    brake[_index(peak_m) + 1 : _index(release_m) + 1] = taper
+    return brake
+
+
+def test_the_release_and_the_trail_are_compared_like_the_brake_point():
+    """All four markers are measured against the reference, not just the first."""
+    reference = _trace(brake=_trail_brake(800.0, 840.0, 900.0))
+    other = _trace(brake=_trail_brake(800.0, 840.0, 960.0))
+    comparison = compare_corners(reference, other, [_corner(1, 900.0, 950.0, 1000.0)])[0]
+    what = [d.what for d in comparison.differences]
+    assert "brake release" in what
+    assert "trail length" in what
+
+
+def test_a_trail_difference_inside_the_noise_floor_is_not_reported():
+    """Two positions on one trace, so the error is about twice a single one's."""
+    reference = _trace(brake=_trail_brake(800.0, 840.0, 900.0))
+    other = _trace(brake=_trail_brake(800.0, 840.0, 904.0))
+    comparison = compare_corners(reference, other, [_corner(1, 900.0, 950.0, 1000.0)])[0]
+    what = [d.what for d in comparison.differences]
+    assert "trail length" not in what
+    assert "brake release" not in what
+
+
 def test_a_slower_corner_is_charged_the_time_it_cost():
     slow = np.full(len(grid_for(LAP_M)), 150.0)
     slow[_index(900.0) : _index(1000.0)] = 100.0

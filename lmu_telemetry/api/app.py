@@ -24,10 +24,14 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..cache.store import ArrayCache, CacheError, SummaryCache, source_key
-from ..core import Session, build_trace, clean_laps, compare_corners, delta_s
+from ..core import (
+    Session, build_trace, clean_laps, compare_corners, delta_s, ideal_lap
+)
+from ..core.blocks import SEAM_SPEED_KMH
 from ..core.coaching import advice
 from ..core.metrics import BRAKE_ON, braking_zones
 from ..core.trace import LapTrace, TraceError
+from ..recordings import default_recordings_dir
 from .decimate import TARGET_POINTS, decimate
 from .pool import SessionPool
 
@@ -96,7 +100,7 @@ def create_app(
     cache_dir: "str | Path | None" = None,
 ) -> FastAPI:
     """Build the application. *recordings_dir* is where sessions are read from."""
-    root = Path(recordings_dir) if recordings_dir else Path("data") / "sessions"
+    root = Path(recordings_dir) if recordings_dir else default_recordings_dir()
     cache_root = Path(cache_dir) if cache_dir else Path(".cache") / "traces"
     sessions = pool if pool is not None else SessionPool(
         model_cache_dir=cache_root / "models"
@@ -415,6 +419,66 @@ def create_app(
                 pass
         return session, model, trace
 
+    @app.get("/api/sessions/{name}/ideal")
+    def ideal(name: str) -> dict:
+        """The best lap that could be assembled from this recording's laps.
+
+        One recording, because `ideal_lap` requires it: two recordings mean two
+        fuel loads and two tyre states, and a block time from one is not
+        comparable to a block time from the other.
+        """
+        session, model = _model_for(name)
+        if model is None:
+            raise HTTPException(
+                422, f"no clean lap in {name!r} to measure the track from"
+            )
+        usable = clean_laps(session)
+        if len(usable) < 2:
+            raise HTTPException(
+                422,
+                f"{name!r} has {len(usable)} usable lap of {len(session.laps)}. "
+                f"An ideal lap is assembled from several, so it needs at least "
+                f"two to choose between.",
+            )
+        try:
+            traces = [
+                build_trace(session, lap, model.track_length_m, origin=model.origin)
+                for lap in usable
+            ]
+        except TraceError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        built = ideal_lap(traces, model.corners)
+        return {
+            "name": name,
+            "track": model.key.track,
+            "laps_used": [lap.number for lap in usable],
+            "ideal_s": round(built.ideal_s, 3),
+            "best_lap_s": round(built.best_lap_s, 3),
+            "best_lap_number": built.best_lap_number,
+            "gain_s": round(built.gain_s, 3),
+            "sound": built.sound,
+            "blocks": [{
+                "index": choice.block.index,
+                "name": choice.block.name,
+                "corners": [c.index for c in choice.block.corners],
+                "start_m": round(choice.block.start_m, 1),
+                "end_m": round(choice.block.end_m, 1),
+                "wraps": choice.block.start_m > choice.block.end_m,
+                "lap_number": choice.lap_number,
+                "time_s": round(choice.time_s, 3),
+                "gain_s": round(choice.gain_s, 3),
+            } for choice in built.blocks],
+            "seams": [{
+                "at_m": round(seam.at_m, 1),
+                "speed_spread_kmh": round(seam.speed_spread_kmh, 1),
+                "sound": seam.sound,
+            } for seam in built.seams],
+            # Sent rather than repeated client-side: the flags above are
+            # computed with it, so a client with its own copy would one day
+            # mark a threshold that disagrees with them.
+            "seam_limit_kmh": SEAM_SPEED_KMH,
+        }
+
     @app.get("/api/sessions/{name}/laps/{lap_number}/trace")
     def lap_trace(
         name: str,
@@ -547,6 +611,12 @@ def _corner_metrics(metrics) -> dict:
     return {
         "brake_point_m": None if metrics.brake_point_m is None
         else round(metrics.brake_point_m, 1),
+        "brake_peak_m": None if metrics.brake_peak_m is None
+        else round(metrics.brake_peak_m, 1),
+        "brake_release_m": None if metrics.brake_release_m is None
+        else round(metrics.brake_release_m, 1),
+        "trail_length_m": None if metrics.trail_length_m is None
+        else round(metrics.trail_length_m, 1),
         "entry_speed_kmh": round(metrics.entry_speed_kmh, 1),
         "min_speed_kmh": round(metrics.min_speed_kmh, 1),
         "min_speed_at_m": round(metrics.min_speed_at_m, 1),

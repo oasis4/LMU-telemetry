@@ -52,7 +52,7 @@ def test_heading_comes_from_the_tangent_not_from_integrating_curvature():
     """
     for radius, integrated_at_least in ((15.0, 400.0), (20.0, 385.0), (25.0, 375.0)):
         x, y, grid = _circle(radius)
-        integrated = float(np.degrees(abs(np.trapz(curvature(x, y), grid))))
+        integrated = float(np.degrees(abs(np.trapezoid(curvature(x, y), grid))))
         assert integrated > integrated_at_least, f"radius {radius} m"
         assert heading_change_deg(turn_rad(x, y)) == pytest.approx(360.0, abs=1e-9)
 

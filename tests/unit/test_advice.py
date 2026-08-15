@@ -52,6 +52,16 @@ def _brake_from(distance_m):
     return brake
 
 
+def _trail_brake(start_m, peak_m, release_m):
+    """Pressure up at *start_m*, highest at *peak_m*, bled off by *release_m*."""
+    brake = np.zeros(len(grid_for(LAP_M)))
+    brake[_index(start_m) : _index(peak_m)] = 0.6
+    brake[_index(peak_m)] = 1.0
+    taper = np.linspace(1.0, 0.0, _index(release_m) - _index(peak_m) + 2)[1:-1]
+    brake[_index(peak_m) + 1 : _index(release_m) + 1] = taper
+    return brake
+
+
 def _throttle_from(distance_m):
     throttle = np.zeros(len(grid_for(LAP_M)))
     throttle[_index(distance_m) :] = 1.0
@@ -67,6 +77,45 @@ def _slow_through(minimum_kmh, exit_kmh=200.0, pace=200.0):
 
 def _advice_for(reference, other):
     return advice(compare_corners(reference, other, [CORNER]))
+
+
+def test_a_different_brake_shape_alone_says_nothing():
+    """Two valid styles, not a fault.
+
+    One driver stops the car and turns it; the other carries the brake to the
+    apex. The corner cost nothing and the outcome matched, so there is no
+    result to attach the shape to - and telemetry cannot tell a style from a
+    mistake without one.
+    """
+    speed = _slow_through(100.0)
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 860.0), speed_kmh=speed)
+    other = _trace(brake=_trail_brake(800.0, 820.0, 960.0), speed_kmh=speed)
+    assert _advice_for(reference, other) == []
+
+
+def test_a_brake_shape_difference_with_a_matched_outcome_stays_quiet():
+    """The corner cost time and the shape really did differ - and still nothing.
+
+    Neither the minimum nor the exit is measurably worse, so nothing ties the
+    loss to the shape. Naming it here would be a guess wearing a number, which
+    is the failure this whole feature is built to avoid.
+    """
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 860.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 820.0, 960.0), speed_kmh=_slow_through(98.0))
+
+    comparison = compare_corners(reference, other, [CORNER])[0]
+    assert comparison.lost_s > ADVICE_MIN_LOSS_S, "the corner must actually cost time"
+    assert "trail length" in [d.what for d in comparison.differences], (
+        "the shape difference must be visible, or this tests nothing"
+    )
+    assert abs(comparison.other.min_speed_kmh - comparison.reference.min_speed_kmh) < (
+        ADVICE_SPEED_KMH
+    ), "the outcome must be matched, or this tests the wrong rule"
+
+    found = advice([comparison])
+    assert all(
+        "trail" not in a.because and "brake peak" not in a.because for a in found
+    ), [a.headline for a in found]
 
 
 def test_braking_later_alone_says_nothing():
@@ -142,6 +191,32 @@ def test_braking_later_and_slower_through_the_middle_is_a_story():
     assert "braking earlier" in found[0].headline.lower()
 
 
+def test_braking_early_with_a_short_trail_is_told_to_stay_on_the_brake():
+    """Braked earlier, off the pedal sooner, and slower through the middle.
+
+    The car was slowed in a straight line and then rolled through with no
+    brake left to turn it. The coarse rule can only say "brake later"; the
+    trail is what makes the second half of the sentence true.
+    """
+    reference = _trace(brake=_trail_brake(840.0, 860.0, 940.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(790.0, 810.0, 850.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "longer" in found[0].headline.lower()
+    assert "trail length" in found[0].because
+    assert "brake point" in found[0].because
+
+
+def test_braking_early_without_a_trail_difference_still_gets_the_coarse_rule():
+    """The finer rule refines rule 2; it must not swallow it."""
+    reference = _trace(brake=_brake_from(840.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_brake_from(790.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "brake later" in found[0].headline.lower()
+    assert "trail length" not in found[0].because
+
+
 def test_braking_earlier_and_still_slower_is_the_other_story():
     reference = _trace(brake=_brake_from(840.0), speed_kmh=_slow_through(100.0))
     other = _trace(brake=_brake_from(790.0), speed_kmh=_slow_through(80.0))
@@ -172,6 +247,46 @@ def test_a_late_throttle_pick_up_with_a_slower_exit():
     assert "throttle point" in found[0].because
 
 
+def test_a_long_trail_with_a_slower_exit_is_told_to_release_earlier():
+    """The entry matched; the brake was still on where the throttle belonged.
+
+    The slower stretch has to reach the corner's last sample, which is where
+    exit speed is read. Ended at 1000 m it stops one sample short, both laps
+    read 200 km/h there, and the rule this test exists for never fires.
+    """
+    fast = np.full(len(grid_for(LAP_M)), 200.0)
+    fast[_index(900.0) : _index(960.0)] = 100.0    # matched through the middle
+    slow = fast.copy()
+    fast[_index(960.0) : _index(1010.0)] = 190.0   # the reference picks up
+    slow[_index(960.0) : _index(1010.0)] = 120.0   # this lap is still slowing
+
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 900.0), speed_kmh=fast)
+    other = _trace(brake=_trail_brake(800.0, 820.0, 980.0), speed_kmh=slow)
+
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "off the brake earlier" in found[0].headline.lower()
+    assert "trail length" in found[0].because
+    assert "exit speed" in found[0].because
+
+
+def test_a_long_trail_with_a_worse_entry_is_not_read_as_the_release():
+    """Both a longer trail and a lower minimum speed.
+
+    The trail rule must not claim this one: with the entry unmatched, the long
+    trail is as likely a consequence - a driver still slowing because they
+    arrived too fast - as a cause. Telling them to release earlier would point
+    them away from the corner they actually entered too quickly.
+    """
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 880.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 820.0, 970.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert found, "a corner this much slower should say something"
+    assert all("off the brake earlier" not in a.headline.lower() for a in found), [
+        a.headline for a in found
+    ]
+
+
 def test_every_piece_of_advice_carries_the_numbers_it_rests_on():
     reference = _trace(brake=_brake_from(800.0), speed_kmh=_slow_through(100.0))
     other = _trace(brake=_brake_from(840.0), speed_kmh=_slow_through(80.0))
@@ -179,6 +294,29 @@ def test_every_piece_of_advice_carries_the_numbers_it_rests_on():
     assert any(ch.isdigit() for ch in found.because)
     assert "km/h" in found.because
     assert "s" in found.because
+
+
+def test_a_late_peak_from_the_same_brake_point_is_told_to_build_pressure():
+    """Pedal down in the right place, full pressure late, slower through the middle.
+
+    A single brake point cannot see this at all: both laps braked at 800 m.
+    What differs is how fast the pressure arrived after that.
+    """
+    reference = _trace(brake=_trail_brake(800.0, 812.0, 900.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 860.0, 900.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "pressure" in found[0].headline.lower()
+    assert "brake peak" in found[0].because
+
+
+def test_a_matched_peak_still_gets_the_corner_speed_rule():
+    """The finer rule refines rule 4; it must not swallow it."""
+    reference = _trace(brake=_trail_brake(800.0, 820.0, 900.0), speed_kmh=_slow_through(100.0))
+    other = _trace(brake=_trail_brake(800.0, 822.0, 900.0), speed_kmh=_slow_through(80.0))
+    found = _advice_for(reference, other)
+    assert len(found) == 1
+    assert "corner speed" in found[0].headline.lower()
 
 
 def test_a_corner_that_cost_nothing_gets_no_advice():
@@ -219,6 +357,31 @@ def test_advice_is_ordered_worst_corner_first():
 
     found = advice(compare_corners(_trace(speed_kmh=speed), _trace(speed_kmh=slow), corners))
     assert [a.corner.index for a in found] == [2, 1]
+
+
+def test_brake_shape_advice_on_real_laps_always_carries_an_outcome(monza_q_file):
+    """Real pedal traces, not the clean trapezoids the rest of this file builds.
+
+    A trail or pressure sentence with no speed behind it is the failure this
+    whole feature is arranged to avoid, so it is checked where the brake
+    channel is noisy and the release is a real taper.
+    """
+    with Session.open(monza_q_file) as session:
+        model = build_track_model([session])
+        laps = {lap.number: lap for lap in session.laps}
+        reference = build_trace(session, laps[2], model.track_length_m)
+        other = build_trace(session, laps[1], model.track_length_m)
+        found = advice(compare_corners(reference, other, model.corners))
+
+    shape = [
+        tip for tip in found
+        if "trail length" in tip.because or "brake peak" in tip.because
+    ]
+    assert shape, "these two laps differ enough that a shape rule should fire"
+    for tip in shape:
+        assert "minimum speed" in tip.because or "exit speed" in tip.because, (
+            tip.headline, tip.because
+        )
 
 
 @pytest.mark.corpus
@@ -275,6 +438,38 @@ def test_one_braking_event_produces_one_piece_of_advice():
     )
     braking = [a for a in found if "brake point" in a.because]
     assert len(braking) == 1, [a.corner.name for a in braking]
+
+
+def test_one_braking_event_produces_one_finding_whatever_names_it():
+    """The Ascari guard has to see the shape rules, not only "brake point".
+
+    Both corners resolve the same brake application, so both report the same
+    late peak. The guard keyed on the phrase "brake point", and the pressure
+    and trail rules do not print it - so one stop came back as two findings.
+    """
+    corners = [
+        Corner(index=1, name="Ascari 1", start_m=900.0, apex_m=930.0, end_m=960.0,
+               radius_m=80.0, heading_deg=90.0, direction="L"),
+        Corner(index=2, name="Ascari 2", start_m=960.0, apex_m=990.0, end_m=1020.0,
+               radius_m=80.0, heading_deg=90.0, direction="R"),
+    ]
+    speed = np.full(len(grid_for(LAP_M)), 200.0)
+    speed[_index(900.0) : _index(1020.0)] = 110.0
+    slow = speed.copy()
+    slow[_index(900.0) : _index(1020.0)] = 85.0
+
+    found = advice(
+        compare_corners(
+            _trace(brake=_trail_brake(800.0, 812.0, 900.0), speed_kmh=speed),
+            _trace(brake=_trail_brake(800.0, 860.0, 900.0), speed_kmh=slow),
+            corners,
+        )
+    )
+    braking = [
+        a for a in found
+        if any(p in a.because for p in ("brake point", "brake peak", "trail length"))
+    ]
+    assert len(braking) == 1, [(a.corner.name, a.because) for a in braking]
 
 
 def test_two_separate_braking_events_both_get_advice():

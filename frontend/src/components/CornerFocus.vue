@@ -218,6 +218,12 @@ const numbers = computed(() => {
   return [
     ['brake point', metres(r.brake_point_m), metres(o.brake_point_m),
       difference(r.brake_point_m, o.brake_point_m, 'm', 0)],
+    // The metres the brake was bled off over, from peak pressure to release.
+    // The peak and the release themselves stay out: the length is the
+    // comparable number, and two more marker rows would push the speeds this
+    // panel exists to show off the visible part of it.
+    ['trail length', metres(r.trail_length_m), metres(o.trail_length_m),
+      difference(r.trail_length_m, o.trail_length_m, 'm', 0)],
     ['entry speed', `${r.entry_speed_kmh.toFixed(1)} km/h`, `${o.entry_speed_kmh.toFixed(1)} km/h`,
       difference(r.entry_speed_kmh, o.entry_speed_kmh, 'km/h', 1)],
     ['minimum speed', `${r.min_speed_kmh.toFixed(1)} km/h`, `${o.min_speed_kmh.toFixed(1)} km/h`,

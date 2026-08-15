@@ -27,6 +27,10 @@ from .trace import LapTrace
 BRAKE_POINT_NOISE_M = 5.0
 SPEED_NOISE_KMH = 1.0
 TIME_NOISE_S = 0.02
+#: A trail length is the gap between two positions on one trace, so its error
+#: is about twice a single position's - which is why this is not
+#: BRAKE_POINT_NOISE_M.
+TRAIL_NOISE_M = 2 * BRAKE_POINT_NOISE_M
 
 
 @dataclass(frozen=True)
@@ -92,8 +96,55 @@ def _differences(reference: CornerMetrics, other: CornerMetrics) -> tuple[Differ
         if abs(metres) >= BRAKE_POINT_NOISE_M:
             found.append((abs(metres), Difference("throttle point", metres, "m")))
 
+    if reference.brake_release_m is not None and other.brake_release_m is not None:
+        metres = other.brake_release_m - reference.brake_release_m
+        if abs(metres) >= BRAKE_POINT_NOISE_M:
+            found.append((abs(metres), Difference("brake release", metres, "m")))
+
+    if reference.trail_length_m is not None and other.trail_length_m is not None:
+        metres = other.trail_length_m - reference.trail_length_m
+        if abs(metres) >= TRAIL_NOISE_M:
+            found.append((abs(metres), Difference("trail length", metres, "m")))
+
     found.sort(key=lambda entry: -entry[0])
     return tuple(difference for _weight, difference in found)
+
+
+def corner_comparison(
+    corner: Corner,
+    reference: CornerMetrics,
+    other: CornerMetrics,
+    lost_s: float,
+) -> CornerComparison:
+    """One corner's comparison, from metrics that have already been taken.
+
+    Public because the live overlay builds comparisons one corner at a time,
+    as each is completed, and cannot wait for the whole-lap delta that
+    :func:`compare_corners` integrates. Both paths come through here so the
+    list of differences is assembled once: two constructions of a
+    ``CornerComparison`` would be two chances for the panel and the browser to
+    describe one corner differently.
+
+    *lost_s* is the caller's to supply, because the two paths measure it
+    differently and both are right - see :mod:`live.watch`.
+    """
+    return CornerComparison(
+        corner=corner,
+        lost_s=lost_s,
+        reference=reference,
+        other=other,
+        differences=_differences(reference, other),
+    )
+
+
+def advise_on(comparison: CornerComparison) -> "Advice | None":
+    """What to try in this corner, or ``None`` if the data does not say.
+
+    The single-corner entry point. :func:`advice` is the whole-lap one, which
+    also drops a second finding about a braking event it has already named;
+    that guard needs the other corners to exist, so it has nothing to do here.
+    """
+    return _advise(comparison)
 
 
 def compare_corners(
@@ -105,20 +156,15 @@ def compare_corners(
     otherwise, because two grids mean two different tracks.
     """
     delta = delta_s(reference, other)
-    out = []
-    for corner in corners:
-        reference_metrics = corner_metrics(reference, corner)
-        other_metrics = corner_metrics(other, corner)
-        out.append(
-            CornerComparison(
-                corner=corner,
-                lost_s=time_lost_over(delta, reference.grid, corner),
-                reference=reference_metrics,
-                other=other_metrics,
-                differences=_differences(reference_metrics, other_metrics),
-            )
+    return [
+        corner_comparison(
+            corner,
+            corner_metrics(reference, corner),
+            corner_metrics(other, corner),
+            time_lost_over(delta, reference.grid, corner),
         )
-    return out
+        for corner in corners
+    ]
 
 
 def biggest_losses(comparisons, count: int = 3) -> list[CornerComparison]:
@@ -138,6 +184,13 @@ ADVICE_POINT_M = 15.0
 
 #: And how much slower counts, in km/h.
 ADVICE_SPEED_KMH = 3.0
+
+#: How much longer or shorter a trail phase has to be to count. A trail length
+#: is the gap between two positions on one trace, so its error is about twice
+#: ADVICE_POINT_M's - and a typical trail runs 20-60 m, which makes this
+#: deliberately demanding. Silence is the right answer here more often than
+#: not: a release point is as often a style as a mistake.
+ADVICE_TRAIL_M = 15.0
 
 
 @dataclass(frozen=True)
@@ -164,6 +217,17 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
     speak. Later braking on its own means nothing - it is what a faster driver
     does. Later braking together with a lower minimum speed and lost time is a
     corner entered too fast to rotate, and that is a claim the numbers carry.
+
+    The rules that read the *shape* of the braking - where pressure peaked and
+    how far it was bled off over - carry that further: each is tied to a
+    minimum or exit speed, and none of them may speak from the shape alone.
+    One driver stops the car and turns it, another carries the brake to the
+    apex, and both are right. Without a result attached, a sentence about the
+    release is technically true and useless to drive on.
+
+    Order matters here. The three shape rules each sit directly above the
+    coarser rule they refine, so the coarse one still catches every corner
+    whose shape says nothing.
     """
     if comparison.lost_s < ADVICE_MIN_LOSS_S:
         return None
@@ -180,6 +244,16 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
         None
         if reference.throttle_point_m is None or other.throttle_point_m is None
         else other.throttle_point_m - reference.throttle_point_m
+    )
+    trail = (
+        None
+        if reference.trail_length_m is None or other.trail_length_m is None
+        else other.trail_length_m - reference.trail_length_m
+    )
+    peak = (
+        None
+        if reference.brake_peak_m is None or other.brake_peak_m is None
+        else other.brake_peak_m - reference.brake_peak_m
     )
 
     def amounts(*parts: str) -> str:
@@ -204,6 +278,34 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
             comparison.lost_s,
         )
 
+    # Braked earlier, off the pedal sooner, and slower through the middle: the
+    # car was stopped in a straight line and then rolled through the corner
+    # with nothing left on the brake to turn it. This is the rule below with
+    # its reason attached, so it is tried first and that rule catches whatever
+    # it leaves - a brake-point difference with no trail difference behind it
+    # is still worth saying, just not with the second half of this sentence.
+    if (
+        brake is not None
+        and brake < -ADVICE_POINT_M
+        and trail is not None
+        and trail < -ADVICE_TRAIL_M
+        and minimum < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "Brake a touch later and stay on it longer",
+            "You went to the brake earlier and came off it sooner, so the car "
+            "was slowed in a straight line and had nothing left on the brake "
+            "to turn with.",
+            amounts(
+                f"brake point {brake:+.0f} m",
+                f"trail length {trail:+.0f} m",
+                f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
     # Braked earlier and slower everywhere: there was time left on the brakes.
     if (
         brake is not None
@@ -218,6 +320,33 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
             amounts(
                 f"brake point {brake:+.0f} m",
                 f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
+    # Off the brake much later, with the entry matched and the exit slower:
+    # the brake was still on where the reference was already driving.
+    #
+    # The entry condition is what rules out the alternative. A long trail with
+    # a *worse* minimum speed is a driver still slowing down because they
+    # arrived too fast, not one over-trailing, and telling them to release
+    # earlier would point them away from the corner they actually entered too
+    # quickly.
+    if (
+        trail is not None
+        and trail > ADVICE_TRAIL_M
+        and minimum > -ADVICE_SPEED_KMH
+        and exit_speed < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "Come off the brake earlier here",
+            "You matched the reference into the corner but carried the brake "
+            "further through it, and the time went on the way out.",
+            amounts(
+                f"trail length {trail:+.0f} m",
+                f"exit speed {exit_speed:+.1f} km/h",
                 f"cost {comparison.lost_s:.3f} s",
             ),
             comparison.lost_s,
@@ -249,6 +378,32 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
             comparison.lost_s,
         )
 
+    # The pedal went down in the right place, but the pressure arrived late -
+    # so the stop happened deeper than it should have and the middle of the
+    # corner paid for it. A single brake point cannot see this at all: both
+    # laps braked in the same metre. This is the rule below with a cause, so
+    # it is tried first and that rule catches what it leaves.
+    if (
+        brake is not None
+        and abs(brake) <= ADVICE_POINT_M
+        and peak is not None
+        and peak > ADVICE_POINT_M
+        and minimum < -ADVICE_SPEED_KMH
+    ):
+        return Advice(
+            comparison.corner,
+            "Get to full brake pressure sooner",
+            "You went to the brake in the same place but took longer to reach "
+            "peak pressure, so the car was still slowing where it should have "
+            "been turning.",
+            amounts(
+                f"brake peak {peak:+.0f} m",
+                f"minimum speed {minimum:+.1f} km/h",
+                f"cost {comparison.lost_s:.3f} s",
+            ),
+            comparison.lost_s,
+        )
+
     # Slower through the middle with nothing else to explain it.
     if minimum < -ADVICE_SPEED_KMH and (brake is None or abs(brake) <= ADVICE_POINT_M):
         return Advice(
@@ -269,6 +424,22 @@ def _advise(comparison: "CornerComparison") -> "Advice | None":
 #: Two corners whose reference brake points sit this close were braked for
 #: once. Half a grid step apart is the same sample.
 SAME_BRAKING_M = 2.0
+
+#: Phrases that mean a piece of advice is about the braking event itself.
+#: Every brake-shape rule reads that one application, so any of them naming it
+#: is a finding about it - not only the two that happen to print "brake point".
+_BRAKING_PHRASES = ("brake point", "brake peak", "trail length")
+
+
+def names_braking(item: Advice) -> bool:
+    """Whether this advice is about the braking, whichever rule produced it.
+
+    Public because both callers that de-duplicate need the same answer: the
+    whole-lap :func:`advice`, and the live overlay's watch, which sees corners
+    one at a time and remembers instead of sorting. Two spellings of this test
+    would be two ideas of what counts as one braking event.
+    """
+    return any(phrase in item.because for phrase in _BRAKING_PHRASES)
 
 
 def advice(comparisons, count: int = 4) -> "list[Advice]":
@@ -291,8 +462,7 @@ def advice(comparisons, count: int = 4) -> "list[Advice]":
         if item is None:
             continue
         point = comparison.reference.brake_point_m
-        about_braking = "brake point" in item.because
-        if about_braking and point is not None:
+        if names_braking(item) and point is not None:
             if any(abs(point - cited) < SAME_BRAKING_M for cited in braking_cited):
                 continue
             braking_cited.append(point)

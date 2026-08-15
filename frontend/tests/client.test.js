@@ -136,4 +136,44 @@ describe('the api client', () => {
     expect(failure).toBeInstanceOf(ApiError)
     expect(failure.url).toContain('/api/sessions/missing.duckdb/track')
   })
+
+  it('asks for an ideal lap by recording alone', async () => {
+    // No lap number: the ideal is built from the recording's usable laps as a
+    // set, which is what ideal_lap requires.
+    const fetcher = respond({ blocks: [], seams: [] })
+    const client = createClient({ base: 'http://x/', fetcher })
+
+    await client.ideal('Monza Q.duckdb')
+
+    const url = new URL(fetcher.mock.calls[0][0])
+    expect(url.pathname).toBe('/api/sessions/Monza%20Q.duckdb/ideal')
+    expect([...url.searchParams]).toEqual([])
+  })
+
+  it('hands the ideal lap back as plain numbers, not typed arrays', async () => {
+    // Nothing here is a measurement series. Float64Array would describe it
+    // dishonestly and break `.toFixed` on the way through.
+    const client = createClient({
+      base: 'http://x/',
+      fetcher: respond({ ideal_s: 101.212, blocks: [{ time_s: 30.1 }], seams: [] }),
+    })
+    const body = await client.ideal('a.duckdb')
+    expect(body.blocks[0].time_s).toBe(30.1)
+    expect(body.blocks).toBeInstanceOf(Array)
+  })
+
+  it('surfaces the reason the server gave for refusing an ideal lap', async () => {
+    // The 422 for too few usable laps is the common answer, not an edge case,
+    // so its text has to reach the user rather than a status line.
+    const client = createClient({
+      base: 'http://x/',
+      fetcher: vi.fn(async () => ({
+        ok: false,
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        json: async () => ({ detail: "'a.duckdb' has 1 usable lap of 3." }),
+      })),
+    })
+    await expect(client.ideal('a.duckdb')).rejects.toThrow(/1 usable lap of 3/)
+  })
 })
