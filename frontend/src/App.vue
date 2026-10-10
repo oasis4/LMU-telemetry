@@ -15,9 +15,10 @@ const { comparison } = storeToRefs(store)
         <router-link :to="{ name: 'compare' }">Compare</router-link>
         <router-link :to="{ name: 'ideal' }">Ideal lap</router-link>
         <router-link :to="{ name: 'sessions' }">Recordings</router-link>
+        <router-link :to="{ name: 'sharing' }">Sharing</router-link>
       </nav>
       <div v-if="comparison" class="context">
-        {{ comparison.reference.name }} · lap {{ comparison.reference.lap }}
+        {{ comparison.reference.display_name ?? comparison.reference.name }} · lap {{ comparison.reference.lap }}
         vs lap {{ comparison.other.lap }}
       </div>
     </header>

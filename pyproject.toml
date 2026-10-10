@@ -17,6 +17,7 @@ dependencies = [
     # api/ is part of the package, so its dependencies are the package's.
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "gdown==6.4.2",
 ]
 
 [project.optional-dependencies]

@@ -29,6 +29,18 @@ import { useTelemetryStore } from '../stores/telemetry.js'
 const store = useTelemetryStore()
 const { sessions, comparison, loading, error } = storeToRefs(store)
 
+const sharingError = ref('')
+const sharingMessage = ref('')
+const sharingBusy = ref(false)
+async function shareSelected(side) {
+  sharingError.value = ''; sharingMessage.value = ''; sharingBusy.value = true
+  try {
+    await store.client.shareLap(store.selection[side], store.selection[`${side}Lap`])
+    sharingMessage.value = 'Lap written to your sharing folder. Drive Desktop will upload it.'
+  } catch (err) { sharingError.value = err.message }
+  finally { sharingBusy.value = false }
+}
+
 const focusIndex = ref(null)
 const fullResolution = ref(false)
 const trackMap = shallowRef(null)
@@ -101,6 +113,14 @@ watch(comparison, (found) => {
 
 <template>
   <div class="compare">
+    <div class="share-actions">
+      <template v-for="side in ['reference', 'other']" :key="side">
+        <button v-if="selection[side] && !selection[side].startsWith('shared-')" type="button" :disabled="sharingBusy" @click="shareSelected(side)">Share {{ side === 'reference' ? 'reference' : 'compared' }} lap</button>
+      </template>
+      <router-link :to="{ name: 'sharing' }">Manage shared laps</router-link>
+      <p v-if="sharingError" role="alert" class="error">{{ sharingError }}</p>
+      <p v-if="sharingMessage" role="status">{{ sharingMessage }}</p>
+    </div>
     <LapBoard
       :sessions="sessions"
       :selection="selection"
@@ -208,6 +228,8 @@ watch(comparison, (found) => {
 </template>
 
 <style scoped>
+.share-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: center; font-size: 0.85rem; }
+.share-actions button { padding: 0.3rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; }
 .compare { display: flex; flex-direction: column; gap: 1rem; }
 
 .reading { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }

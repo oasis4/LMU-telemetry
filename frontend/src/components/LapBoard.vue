@@ -208,7 +208,7 @@ function lapOf(side) {
           <span class="muted">
             {{ summaryOf(picked[side]).car_class }} ·
             {{ carEntry(summaryOf(picked[side]).car).entry }} ·
-            {{ summaryOf(picked[side]).driver }} · lap {{ lapOf(side) }}
+            {{ summaryOf(picked[side]).friend ? `${summaryOf(picked[side]).friend} · ` : '' }}{{ summaryOf(picked[side]).driver }} · lap {{ lapOf(side) }}
           </span>
         </template>
         <span v-else class="muted">not chosen</span>
@@ -264,7 +264,7 @@ function lapOf(side) {
               }}<span v-if="carEntry(session.car).series" class="muted series">
                 {{ carEntry(session.car).series }}</span>
             </span>
-            <span class="driver">{{ session.driver }}</span>
+            <span class="driver">{{ session.friend ? `${session.friend} · ` : '' }}{{ session.driver }}</span>
 
             <span class="muted count num">
               {{ session.best_lap === null ? 'no usable lap' : `${session.clean_laps} usable` }}

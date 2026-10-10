@@ -17,11 +17,17 @@ an overview costs.
 
 from __future__ import annotations
 
+import hashlib
+import re
+from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 
 from ..cache.store import ArrayCache, CacheError, SummaryCache, source_key
 from ..core import (
@@ -32,6 +38,8 @@ from ..core.coaching import advice
 from ..core.metrics import BRAKE_ON, braking_zones
 from ..core.trace import LapTrace, TraceError
 from ..recordings import default_recordings_dir
+from ..sharing.library import SharingLibrary, state_dir
+from ..sharing.package import SharedLap, align_trace
 from .decimate import TARGET_POINTS, decimate
 from .pool import SessionPool
 
@@ -94,10 +102,23 @@ def _series(values: np.ndarray, digits: int = 3) -> list[float]:
     return [round(float(v), digits) for v in values]
 
 
+class SharingSettings(BaseModel):
+    publish_dir: str
+    public_url: str = ""
+
+
+class FriendSettings(BaseModel):
+    name: str
+    url: str
+
+
 def create_app(
     recordings_dir: "str | Path | None" = None,
     pool: "SessionPool | None" = None,
     cache_dir: "str | Path | None" = None,
+    frontend_dir: "str | Path | None" = None,
+    sharing_dir: "str | Path | None" = None,
+    sharing_provider=None,
 ) -> FastAPI:
     """Build the application. *recordings_dir* is where sessions are read from."""
     root = Path(recordings_dir) if recordings_dir else default_recordings_dir()
@@ -113,13 +134,35 @@ def create_app(
     # after the first request in a process.
     summary_memo: "dict[str, dict]" = {}
 
-    app = FastAPI(title="LMU Telemetry", version="2.0")
+    sharing = SharingLibrary(Path(sharing_dir) if sharing_dir else state_dir() / "sharing", sharing_provider)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        sharing.start()
+        try:
+            yield
+        finally:
+            sharing.close()
+
+    app = FastAPI(title="LMU Telemetry", version="2.0", lifespan=lifespan)
+    app.state.sharing = sharing
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["*"],
     )
+    @app.middleware("http")
+    async def sharing_origin_guard(request: Request, call_next):
+        # A browser may send a simple cross-origin POST even when CORS prevents
+        # reading its response. Reject those before publishing or starting sync.
+        if request.method in {"POST", "PUT", "DELETE"}:
+            origin = request.headers.get("origin")
+            own_origin = f"{request.url.scheme}://{request.url.netloc}"
+            if origin and origin not in {own_origin, "http://localhost:5173", "http://127.0.0.1:5173"}:
+                return JSONResponse({"detail": "Sharing changes must come from the analyzer interface"}, status_code=403)
+        return await call_next(request)
+
     app.state.recordings_dir = root
     app.state.pool = sessions
 
@@ -188,9 +231,86 @@ def create_app(
         The sibling list is built first and the session opened after, because
         building it churns the pool.
         """
+        if _is_shared(name):
+            shared = _shared(name)
+            return shared, shared.model
         siblings = _siblings_of(_resolve(name))
         session = _open(name)
         return session, sessions.model_for(session, siblings)
+
+    def _is_shared(name):
+        return re.fullmatch(r"shared-[a-f0-9]{64}", name) is not None
+
+    def _shared(name):
+        try:
+            return sharing.get(name)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    def _sharing_action(action, *args):
+        try:
+            return action(*args)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/sharing")
+    def sharing_status():
+        return sharing.snapshot()
+
+    @app.get("/api/sharing/library")
+    def shared_library():
+        return {"sessions": sharing.summaries()}
+
+    @app.put("/api/sharing/settings")
+    def sharing_settings(body: SharingSettings):
+        _sharing_action(sharing.settings, body.publish_dir, body.public_url)
+        return sharing.snapshot()["settings"]
+
+    @app.post("/api/sharing/friends")
+    def add_friend(body: FriendSettings):
+        friend = _sharing_action(sharing.add_friend, body.name, body.url)
+        sharing.request_sync(friend["id"])
+        return friend
+
+    @app.delete("/api/sharing/friends/{identity}")
+    def remove_friend(identity: str):
+        _sharing_action(sharing.remove_friend, identity)
+        return {"ok": True}
+
+    @app.post("/api/sharing/sync")
+    def sync_all():
+        return {"started": sharing.request_sync()}
+
+    @app.post("/api/sharing/friends/{identity}/sync")
+    def sync_friend(identity: str):
+        return {"started": _sharing_action(sharing.request_sync, identity)}
+
+    @app.post("/api/sessions/{name}/laps/{lap_number}/share")
+    def share_lap(name: str, lap_number: int):
+        if _is_shared(name):
+            raise HTTPException(422, "Only your recorded laps can be published")
+        session = _open(name)
+        lap = next((lap for lap in clean_laps(session) if lap.number == lap_number), None)
+        if lap is None:
+            raise HTTPException(422, "Only usable recorded laps can be shared")
+        session, model, trace = _trace_for(name, lap_number)
+        # Hash source content, not a machine-specific path or modification time.
+        digest = hashlib.sha256()
+        with _resolve(name).open("rb") as recording:
+            for block in iter(lambda: recording.read(1024 * 1024), b""):
+                digest.update(block)
+        digest.update(f":lap:{lap_number}".encode())
+        shared = SharedLap(digest.hexdigest(), session.info, model, trace)
+        return _sharing_action(sharing.publish, shared, name)
+
+    @app.delete("/api/sharing/published/{identity}")
+    def stop_sharing(identity: str):
+        _sharing_action(sharing.unpublish, identity)
+        return {"ok": True}
 
     @app.get("/api/health")
     def health() -> dict:
@@ -264,7 +384,7 @@ def create_app(
                 found.append(_summary(path))
             except Exception as exc:  # noqa: BLE001 - listed with its reason
                 found.append({"name": path.name, "error": str(exc)})
-        return {"sessions": found}
+        return {"sessions": found + sharing.summaries()}
 
     @app.get("/api/sessions/{name}/laps")
     def list_laps(name: str) -> dict:
@@ -275,6 +395,9 @@ def create_app(
         """
         from ..core.quality import assess_lap
 
+        if _is_shared(name):
+            lap = _shared(name).trace.lap
+            return {"name": name, "laps": [dict(asdict(lap), clean=True, reason=None)]}
         session = _open(name)
         laps = []
         for lap in session.laps:
@@ -384,6 +507,11 @@ def create_app(
         recomputation. A cache that cannot be written is not an error: the
         answer is the same either way, only slower.
         """
+        if _is_shared(name):
+            shared = _shared(name)
+            if shared.trace.lap.number != lap_number:
+                raise HTTPException(404, "Shared lap number not found")
+            return shared, shared.model, shared.trace
         path = _resolve(name)
         session, model = _model_for(name)
         if model is None:
@@ -432,6 +560,8 @@ def create_app(
             raise HTTPException(
                 422, f"no clean lap in {name!r} to measure the track from"
             )
+        if _is_shared(name):
+            raise HTTPException(422, "Ideal laps require a local recording")
         usable = clean_laps(session)
         if len(usable) < 2:
             raise HTTPException(
@@ -484,8 +614,17 @@ def create_app(
         name: str,
         lap_number: int,
         full: bool = Query(False, description="send every sample instead of ~1500"),
+        reference: str | None = Query(None, description="align onto this recording or shared lap's track model"),
     ) -> dict:
         _session, _model, trace = _trace_for(name, lap_number)
+        if reference is not None:
+            _, target_model = _model_for(reference)
+            if target_model is None:
+                raise HTTPException(422, "Reference track model is unavailable")
+            try:
+                trace = align_trace(trace, _model, target_model)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         series = {
             "distance_m": trace.grid,
             "time_s": trace.time_s,
@@ -529,6 +668,11 @@ def create_app(
                 f"/ {other_model.key.layout} are different circuits",
             )
 
+        if _is_shared(reference) or _is_shared(other):
+            try:
+                b = align_trace(b, other_model, model)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         delta = delta_s(a, b)
         comparisons = compare_corners(a, b, model.corners)
         series = {
@@ -545,9 +689,9 @@ def create_app(
         }
         sent = series if full else decimate(series, by="delta_s")
         return {
-            "reference": {"name": reference, "lap": reference_lap,
+            "reference": {"name": reference, "display_name": sharing.label(reference) if _is_shared(reference) else reference, "lap": reference_lap,
                           "duration_s": round(a.lap.duration_s, 3)},
-            "other": {"name": other, "lap": other_lap,
+            "other": {"name": other, "display_name": sharing.label(other) if _is_shared(other) else other, "lap": other_lap,
                       "duration_s": round(b.lap.duration_s, 3)},
             "lap_delta_s": round(float(delta[-1]), 3),
             # The pedal pressure above which the car is braking. Sent rather
@@ -603,6 +747,24 @@ def create_app(
                 "other": _corner_metrics(c.other),
             } for c in comparisons],
         }
+
+    if frontend_dir is not None:
+        web_root = Path(frontend_dir).resolve()
+        if not (web_root / "index.html").is_file():
+            raise ValueError(f"Built frontend missing at {web_root}")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def frontend(path: str):
+            if path == "api" or path.startswith("api/"):
+                raise HTTPException(404, "Not Found")
+            candidate = (web_root / path).resolve()
+            if not candidate.is_relative_to(web_root):
+                raise HTTPException(404, "Not Found")
+            if candidate.is_file():
+                return FileResponse(candidate)
+            if path in ("", "ideal", "recordings", "sharing"):
+                return FileResponse(web_root / "index.html")
+            raise HTTPException(404, "Not Found")
 
     return app
 

@@ -1,0 +1,11 @@
+# Build-only environment; regenerate lock for CPython 3.13 on Windows x64.
+duckdb==1.5.0
+numpy==2.2.6
+scipy==1.15.3
+fastapi==0.115.12
+uvicorn==0.34.3
+pyinstaller==6.14.2
+pyinstaller-hooks-contrib==2025.5
+setuptools==80.9.0
+wheel==0.45.1
+gdown==6.4.2

@@ -1,367 +1,230 @@
-"""LMU Telemetry - one-click launcher for the web interface.
+"""Desktop launcher and internal workers for the portable Windows bundle."""
+from __future__ import annotations
 
-Pick the folder of recordings, start the API and the Vite dev server, and open
-the browser on the page the two serve together.
-
-The API is ``python -m lmu_telemetry.api`` on port 8000. That port is not a
-preference: ``frontend/vite.config.js`` proxies ``/api`` to 127.0.0.1:8000, so
-the browser only ever talks to Vite and Vite is the one that has to find the
-API. This launcher used to start ``backend.main`` on 8001 - a module that no
-longer exists, on a port nothing reads - which brought up two processes that
-never met.
-"""
-
+import argparse
 import json
-import re
+import os
+from pathlib import Path
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 import webbrowser
-from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, ttk
 
 ROOT = Path(__file__).resolve().parent
-CONFIG_FILE = ROOT / ".telemetry_config.json"
-FRONTEND_DIR = ROOT / "frontend"
-VENV_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
-
-#: Where the two servers' output is kept. Under ``.cache`` because that is
-#: already ignored by git, and in files rather than pipes: a pipe nobody reads
-#: fills and blocks the process writing into it, which on Windows is how a
-#: launcher ends up staring at a backend that stopped talking for no visible
-#: reason.
-LOG_DIR = ROOT / ".cache" / "launcher"
-
-API_PORT = 8000
-#: What Vite is asked for. It moves to 5174 and up when the port is taken, so
-#: the address actually opened is read back from its output, not assumed.
-FRONTEND_PORT = 5173
-
-_ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_VITE_LOCAL = re.compile(r"Local:\s*(http://\S+)")
-
-# Windows-only flag; keeping the console hidden is the whole point of the GUI.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _python() -> str:
-    """The interpreter to start the API with, preferring the project's venv."""
-    if VENV_PYTHON.is_file():
-        return str(VENV_PYTHON)
-    return sys.executable
+def state_dir() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local" / "share"))) / "LMU Telemetry"
 
 
-def _load_config() -> dict:
-    if CONFIG_FILE.is_file():
-        try:
-            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
+def frontend_dir() -> Path:
+    return ROOT / "frontend" / "dist"
 
 
-def _save_config(cfg: dict) -> None:
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+def worker_command(mode: str, recordings: Path, readiness: Path | None = None) -> list[str]:
+    command = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        command.append(str(ROOT / "start.py"))
+    command += ["--worker", mode, "--recordings", str(recordings)]
+    if readiness is not None:
+        command += ["--readiness", str(readiness)]
+    return command
 
 
-def _suggested_dir() -> str:
-    """The folder to offer, in the order the rest of the project prefers.
-
-    ``lmu_telemetry.recordings`` already answers this - the curated working set
-    where it exists, the launcher's own configured folder otherwise - so asking
-    it is what keeps the box agreeing with what the API would pick on its own.
-    It imports nothing heavier than ``json``, so it is safe before any check
-    that the dependencies are installed.
-    """
+def load_folder() -> str:
     try:
-        sys.path.insert(0, str(ROOT))
-        from lmu_telemetry.recordings import default_recordings_dir
-
-        found = default_recordings_dir()
-        if found.is_dir():
-            return str(found)
-    except Exception:
-        pass
-    return _load_config().get("telemetry_dir", "")
-
-
-def _tail(path: Path, lines: int = 8) -> str:
-    """The last few lines a server wrote, for a message that says what broke."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        named = json.loads((state_dir() / "settings.json").read_text(encoding="utf-8"))["telemetry_dir"]
+        return named if Path(named).is_dir() else ""
+    except (OSError, ValueError, KeyError, TypeError):
         return ""
-    return " / ".join(text.strip().splitlines()[-lines:])
+
+
+def stop_process(proc) -> None:
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def run_worker(args) -> int:
+    if not args.recordings or not args.recordings.is_dir():
+        raise ValueError("Choose an existing recordings folder")
+    if args.worker == "overlay":
+        from lmu_telemetry.live.__main__ import main
+        return main(["--recordings", str(args.recordings)])
+    if args.readiness is None:
+        raise ValueError("API worker requires a readiness file")
+    import socket
+    from contextlib import asynccontextmanager
+    import uvicorn
+    from lmu_telemetry.api.app import create_app
+    app = create_app(args.recordings, cache_dir=state_dir() / "cache", frontend_dir=frontend_dir())
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, loop="asyncio", http="h11"))
+    # Publish only after ASGI startup completes. The socket remains owned by
+    # this worker from allocation through serving, avoiding port-selection races.
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        lifecycle = app.router.lifespan_context
+        @asynccontextmanager
+        async def ready(application):
+            async with lifecycle(application):
+                args.readiness.write_text(json.dumps({"url": f"http://127.0.0.1:{sock.getsockname()[1]}"}), encoding="utf-8")
+                yield
+        app.router.lifespan_context = ready
+        server.run(sockets=[sock])
+    return 0
 
 
 class LauncherApp:
-    def __init__(self) -> None:
+    def __init__(self):
         self.root = tk.Tk()
-        self.root.title("LMU Telemetry — Launcher")
-        self.root.resizable(False, False)
-        self.root.configure(bg="#111114")
+        self.root.title("LMU Telemetry")
+        self.processes = {"api": None, "overlay": None}
+        self.started = {}
+        self.url = None
+        self.readiness = state_dir() / f"ready-{os.getpid()}.json"
+        self.folder = tk.StringVar(value=load_folder())
+        self.status = {mode: tk.StringVar(value="Stopped") for mode in self.processes}
+        self.buttons = {}
+        frame = ttk.Frame(self.root, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Recordings folder").pack(anchor="w")
+        ttk.Entry(frame, textvariable=self.folder, width=65).pack(fill="x", pady=4)
+        ttk.Button(frame, text="Browse…", command=self.browse).pack(anchor="w")
+        for mode, label in (("api", "analyzer"), ("overlay", "live overlay")):
+            row = ttk.Frame(frame)
+            row.pack(fill="x", pady=8)
+            start = ttk.Button(row, text=f"Start {label}", command=lambda m=mode: self.start(m))
+            start.pack(side="left")
+            stop = ttk.Button(row, text=f"Stop {label}", state="disabled", command=lambda m=mode: self.stop(m))
+            stop.pack(side="left", padx=6)
+            self.buttons[mode] = (start, stop)
+            ttk.Label(frame, textvariable=self.status[mode], wraplength=480).pack(anchor="w")
+        self.open_button = ttk.Button(frame, text="Open analyzer in browser", state="disabled", command=self.open_browser)
+        self.open_button.pack(pady=8)
+        ttk.Button(frame, text="Open logs", command=self.open_logs).pack()
+        ttk.Label(frame, text="Keep this launcher open while using the analyzer or overlay.").pack(pady=8)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.after(250, self.poll)
 
-        self.backend_proc: subprocess.Popen | None = None
-        self.frontend_proc: subprocess.Popen | None = None
-        self.backend_log = LOG_DIR / "api.log"
-        self.frontend_log = LOG_DIR / "frontend.log"
-        self.url = f"http://localhost:{FRONTEND_PORT}"
+    def browse(self):
+        selected = filedialog.askdirectory(initialdir=self.folder.get() or str(Path.home()))
+        if selected:
+            self.folder.set(selected)
 
-        self.telemetry_dir = tk.StringVar(value=_suggested_dir())
-
-        self._build_ui()
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    # ---- UI ---------------------------------------------------------------
-
-    def _build_ui(self) -> None:
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TLabel", background="#111114", foreground="#e0e0e0",
-                        font=("Segoe UI", 10))
-        style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"),
-                        foreground="#3b82f6")
-        style.configure("TButton", font=("Segoe UI", 10))
-        style.configure("Launch.TButton", font=("Segoe UI", 12, "bold"))
-        style.configure("Status.TLabel", foreground="#888888",
-                        font=("Segoe UI", 9))
-
-        pad = {"padx": 16, "pady": 4}
-
-        ttk.Label(self.root, text="LMU Telemetry Analyzer",
-                  style="Title.TLabel").pack(pady=(16, 4), **{"padx": 16})
-        ttk.Label(self.root, text="Pick your recordings folder and launch.",
-                  style="Status.TLabel").pack(**pad)
-
-        # --- Folder picker ---
-        folder_frame = tk.Frame(self.root, bg="#111114")
-        folder_frame.pack(fill="x", **pad)
-
-        ttk.Label(folder_frame, text="Recordings folder:").pack(anchor="w")
-
-        row = tk.Frame(folder_frame, bg="#111114")
-        row.pack(fill="x", pady=4)
-
-        self.dir_entry = ttk.Entry(row, textvariable=self.telemetry_dir,
-                                   width=50)
-        self.dir_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(row, text="Browse…", command=self._browse).pack(
-            side="left", padx=(6, 0))
-
-        # --- Buttons ---
-        btn_frame = tk.Frame(self.root, bg="#111114")
-        btn_frame.pack(fill="x", padx=16, pady=(12, 4))
-
-        self.launch_btn = ttk.Button(btn_frame, text="🚀  Launch",
-                                     style="Launch.TButton",
-                                     command=self._launch)
-        self.launch_btn.pack(fill="x", ipady=6)
-
-        self.open_btn = ttk.Button(btn_frame, text="Open in browser",
-                                   command=self._open, state="disabled")
-        self.open_btn.pack(fill="x", pady=(6, 0))
-
-        self.stop_btn = ttk.Button(btn_frame, text="Stop",
-                                   command=self._stop, state="disabled")
-        self.stop_btn.pack(fill="x", pady=(6, 0))
-
-        # --- Status ---
-        self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(self.root, textvariable=self.status_var,
-                  style="Status.TLabel", wraplength=430,
-                  justify="left").pack(pady=(4, 16), padx=16)
-
-    def _browse(self) -> None:
-        d = filedialog.askdirectory(
-            title="Select the folder holding your .duckdb recordings",
-            initialdir=self.telemetry_dir.get() or str(Path.home()))
-        if d:
-            self.telemetry_dir.set(d)
-
-    # ---- Launch / Stop ----------------------------------------------------
-
-    def _launch(self) -> None:
-        tdir = self.telemetry_dir.get().strip()
-        if not tdir or not Path(tdir).is_dir():
-            self.status_var.set("⚠  That folder is not there. Pick another.")
+    def start(self, mode):
+        folder = Path(self.folder.get().strip())
+        if not self.folder.get().strip() or not folder.is_dir() or not any(folder.glob("*.duckdb")):
+            self.status[mode].set("Choose a folder containing .duckdb recordings.")
             return
-        if not any(Path(tdir).glob("*.duckdb")):
-            self.status_var.set(
-                f"⚠  No .duckdb recordings in {Path(tdir).name}. "
-                f"Pick the folder the game writes telemetry into.")
-            return
-
-        _save_config({"telemetry_dir": tdir})
-
-        self.launch_btn.configure(state="disabled")
-        self.stop_btn.configure(state="normal")
-        self.status_var.set("Starting the API…")
-
-        threading.Thread(target=self._start_servers, args=(tdir,),
-                         daemon=True).start()
-
-    def _start_servers(self, tdir: str) -> None:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-        # --- API ---
-        # The folder is passed explicitly rather than left to the default: the
-        # driver just chose it in the box above, and a launcher that then
-        # served somewhere else would be ignoring the only question it asked.
         try:
-            api_out = self.backend_log.open("w", encoding="utf-8")
-            self.backend_proc = subprocess.Popen(
-                [_python(), "-m", "lmu_telemetry.api",
-                 "--recordings", tdir, "--port", str(API_PORT)],
-                cwd=str(ROOT),
-                stdout=api_out,
-                stderr=subprocess.STDOUT,
-                creationflags=_NO_WINDOW,
-            )
+            state_dir().mkdir(parents=True, exist_ok=True)
+            (state_dir() / "settings.json").write_text(json.dumps({"telemetry_dir": str(folder.resolve())}), encoding="utf-8")
+            if mode == "api":
+                self.readiness.unlink(missing_ok=True)
+                self.url = None
+            with (state_dir() / f"{mode}.log").open("w", encoding="utf-8") as log:
+                self.processes[mode] = subprocess.Popen(
+                    worker_command(mode, folder.resolve(), self.readiness if mode == "api" else None),
+                    stdout=log, stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                )
+            self.started[mode] = time.monotonic()
+            self.buttons[mode][0].configure(state="disabled")
+            self.buttons[mode][1].configure(state="normal")
+            self.status[mode].set("Starting…" if mode == "api" else "Running; waiting for game/reference if needed. See logs for details.")
         except Exception as exc:
-            self._fail(f"❌  The API would not start: {exc}")
-            return
+            self.status[mode].set(f"Could not start: {exc}")
 
-        if not self._wait_for(f"http://localhost:{API_PORT}/api/health",
-                              self.backend_proc, self.backend_log, 30):
-            return
-
-        # --- Frontend ---
-        if not (FRONTEND_DIR / "node_modules").is_dir():
-            self._fail("❌  frontend/node_modules is missing. "
-                       "Run 'npm install' in the frontend folder first.")
-            return
-
-        self._set_status("Starting the browser interface…")
-        npm = "npm.cmd" if sys.platform == "win32" else "npm"
-        try:
-            web_out = self.frontend_log.open("w", encoding="utf-8")
-            self.frontend_proc = subprocess.Popen(
-                [npm, "run", "dev"],
-                cwd=str(FRONTEND_DIR),
-                stdout=web_out,
-                stderr=subprocess.STDOUT,
-                creationflags=_NO_WINDOW,
-            )
-        except FileNotFoundError:
-            self._fail("❌  npm was not found. Install Node.js 18 or newer.")
-            return
-        except Exception as exc:
-            self._fail(f"❌  The browser interface would not start: {exc}")
-            return
-
-        self.url = self._await_vite() or f"http://localhost:{FRONTEND_PORT}"
-        if not self._wait_for(self.url, self.frontend_proc,
-                              self.frontend_log, 30):
-            return
-
-        self._open()
-        self.root.after(0, lambda: self.open_btn.configure(state="normal"))
-        self._set_status(
-            f"✅  Running at {self.url}  (API on :{API_PORT})\n"
-            f"The first listing reads every recording and takes a few seconds."
-        )
-
-    def _await_vite(self, timeout: float = 20.0) -> "str | None":
-        """The address Vite actually bound, read from its own output.
-
-        It is asked for 5173 and takes the next free port when something else
-        holds it, so opening 5173 regardless is how the browser lands on a page
-        that is not this one - or on nothing at all.
-        """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.frontend_proc and self.frontend_proc.poll() is not None:
-                return None
-            try:
-                text = _ANSI.sub("", self.frontend_log.read_text(
-                    encoding="utf-8", errors="replace"))
-            except OSError:
-                text = ""
-            found = _VITE_LOCAL.search(text)
-            if found:
-                return found.group(1).rstrip("/")
-            time.sleep(0.25)
-        return None
-
-    def _wait_for(self, url: str, proc: subprocess.Popen, log: Path,
-                  timeout: int) -> bool:
-        """Poll *url* until it answers, giving up if *proc* dies first.
-
-        Health, not the session listing: ``/api/sessions`` opens every
-        recording it can find, which measured 17 s over 239 of them on a cold
-        cache. Waiting on that would report the API as slow to start when it
-        started immediately and is doing exactly what it was asked to.
-        """
-        self._set_status(f"Waiting for {url} …")
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+    def poll(self):
+        for mode, proc in list(self.processes.items()):
+            if proc is None:
+                continue
             if proc.poll() is not None:
-                self._fail(f"❌  It stopped on its own: {_tail(log)}")
-                return False
-            try:
-                with urllib.request.urlopen(url, timeout=2) as resp:
-                    if resp.status < 500:
-                        return True
-            except Exception:
-                pass
-            time.sleep(0.5)
-        self._fail(f"⚠  No answer from {url} after {timeout} s: {_tail(log)}")
-        return False
-
-    def _open(self) -> None:
-        webbrowser.open(self.url)
-
-    def _stop(self) -> None:
-        self._kill(self.frontend_proc)
-        self._kill(self.backend_proc)
-        self.frontend_proc = None
-        self.backend_proc = None
-        self._reset_buttons()
-        self.status_var.set("Stopped.")
-
-    # ---- Helpers ----------------------------------------------------------
-
-    @staticmethod
-    def _kill(proc: subprocess.Popen | None) -> None:
-        if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
                 try:
-                    proc.kill()
-                except Exception:
+                    details = " / ".join((state_dir() / f"{mode}.log").read_text(encoding="utf-8", errors="replace").splitlines()[-4:])
+                except OSError:
+                    details = "Open logs for details."
+                code = proc.returncode
+                self.stop(mode)
+                self.status[mode].set(f"Exited ({code}): {details}")
+            elif mode == "api" and self.url is None:
+                try:
+                    url = json.loads(self.readiness.read_text(encoding="utf-8"))["url"]
+                    with urllib.request.urlopen(url + "/api/health", timeout=0.2) as response:
+                        if response.status == 200:
+                            self.url = url
+                            self.status[mode].set(f"Running at {url}")
+                            self.open_button.configure(state="normal")
+                            self.open_browser()
+                except (OSError, ValueError, KeyError):
                     pass
+                if self.url is None and time.monotonic() - self.started[mode] > 60:
+                    self.stop(mode)
+                    self.status[mode].set("Startup timed out. Open logs for details.")
+        self.root.after(250, self.poll)
 
-    def _fail(self, message: str) -> None:
-        """Report why, and leave nothing half-started behind."""
-        self._kill(self.frontend_proc)
-        self._kill(self.backend_proc)
-        self.frontend_proc = None
-        self.backend_proc = None
-        self._set_status(message)
-        self._reset_buttons()
+    def stop(self, mode):
+        stop_process(self.processes[mode])
+        self.processes[mode] = None
+        self.buttons[mode][0].configure(state="normal")
+        self.buttons[mode][1].configure(state="disabled")
+        self.status[mode].set("Stopped")
+        if mode == "api":
+            self.url = None
+            self.open_button.configure(state="disabled")
+            self.readiness.unlink(missing_ok=True)
 
-    def _set_status(self, msg: str) -> None:
-        self.root.after(0, lambda: self.status_var.set(msg))
+    def open_browser(self):
+        if self.url:
+            webbrowser.open(self.url)
 
-    def _reset_buttons(self) -> None:
-        def _do():
-            self.launch_btn.configure(state="normal")
-            self.open_btn.configure(state="disabled")
-            self.stop_btn.configure(state="disabled")
-        self.root.after(0, _do)
+    def open_logs(self):
+        state_dir().mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(state_dir())
+        else:
+            webbrowser.open(state_dir().as_uri())
 
-    def _on_close(self) -> None:
-        self._stop()
+    def close(self):
+        for mode in self.processes:
+            self.stop(mode)
         self.root.destroy()
 
-    def run(self) -> None:
+    def run(self):
         self.root.mainloop()
 
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--worker", choices=("api", "overlay"), help=argparse.SUPPRESS)
+    parser.add_argument("--recordings", type=Path)
+    parser.add_argument("--readiness", type=Path, help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.worker:
+        # Windowed frozen executables have no standard streams. Give libraries
+        # and overlay diagnostics real file streams before importing them.
+        state_dir().mkdir(parents=True, exist_ok=True)
+        with (state_dir() / f"{args.worker}.log").open("a", encoding="utf-8", buffering=1) as log:
+            sys.stdout = sys.stderr = log
+            try:
+                return run_worker(args)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                return 1
     LauncherApp().run()
+    return 0
+
+
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    raise SystemExit(main())

@@ -1,9 +1,8 @@
 /**
  * The only place that knows the API's shape.
  *
- * Written against `fetch` rather than axios: every call here is a GET that
- * returns JSON, which is what fetch does without a dependency. The old client
- * pulled in axios for exactly that.
+ * Uses fetch for JSON reads and sharing mutations, without an extra HTTP
+ * client dependency.
  *
  * Measurement arrays are handed back as plain `Float64Array`s. They are the
  * reason a comparison was slow - see `stores/telemetry.js` - and typed arrays
@@ -11,7 +10,7 @@
  * them alone.
  */
 
-const DEFAULT_BASE = import.meta?.env?.VITE_API_BASE ?? 'http://127.0.0.1:8000'
+const DEFAULT_BASE = import.meta?.env?.VITE_API_BASE ?? globalThis.location.origin
 
 export class ApiError extends Error {
   constructor(message, status, url) {
@@ -32,14 +31,14 @@ export function toTypedSeries(series) {
 }
 
 export function createClient({ base = DEFAULT_BASE, fetcher = fetch } = {}) {
-  async function get(path, params) {
+  async function get(path, params, options) {
     const url = new URL(path, base)
     for (const [key, value] of Object.entries(params ?? {})) {
       if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
     }
     let response
     try {
-      response = await fetcher(url.toString())
+      response = await fetcher(url.toString(), ...(options ? [options] : []))
     } catch (cause) {
       // A network failure and a refusal read very differently to a user, so
       // they are not collapsed into one message.
@@ -58,8 +57,20 @@ export function createClient({ base = DEFAULT_BASE, fetcher = fetch } = {}) {
     return response.json()
   }
 
+  const write = (method, path, body) => get(path, undefined, {
+    method,
+    ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  })
+
   return {
     base,
+    sharing: () => get('/api/sharing'),
+    saveSharing: (body) => write('PUT', '/api/sharing/settings', body),
+    addFriend: (body) => write('POST', '/api/sharing/friends', body),
+    removeFriend: (id) => write('DELETE', `/api/sharing/friends/${encodeURIComponent(id)}`),
+    syncFriends: (id) => write('POST', id ? `/api/sharing/friends/${encodeURIComponent(id)}/sync` : '/api/sharing/sync'),
+    shareLap: (name, lap) => write('POST', `/api/sessions/${encodeURIComponent(name)}/laps/${lap}/share`),
+    stopSharing: (id) => write('DELETE', `/api/sharing/published/${encodeURIComponent(id)}`),
     health: () => get('/api/health'),
     sessions: () => get('/api/sessions').then((body) => body.sessions),
     laps: (name) => get(`/api/sessions/${encodeURIComponent(name)}/laps`).then((b) => b.laps),
@@ -76,10 +87,10 @@ export function createClient({ base = DEFAULT_BASE, fetcher = fetch } = {}) {
       return { ...body, x: Float64Array.from(body.x), y: Float64Array.from(body.y) }
     },
 
-    async trace(name, lap, { full = false } = {}) {
+    async trace(name, lap, { full = false, reference } = {}) {
       const body = await get(
         `/api/sessions/${encodeURIComponent(name)}/laps/${lap}/trace`,
-        { full: full || undefined },
+        { full: full || undefined, reference },
       )
       return { ...body, series: toTypedSeries(body.series) }
     },

@@ -12,3 +12,5 @@ data/
 LMU Data*/
 .telemetry_config.json
 .cache/
+.venv-build/
+build/

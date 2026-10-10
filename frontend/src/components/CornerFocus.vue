@@ -176,7 +176,7 @@ async function load() {
         other: other.name, otherLap: other.lap, full: true,
       }),
       store.client.trace(reference.name, reference.lap, { full: true }),
-      store.client.trace(other.name, other.lap, { full: true }),
+      store.client.trace(other.name, other.lap, { full: true, reference: reference.name }),
     ])
     detail.value = full
     const asPath = (trace) =>

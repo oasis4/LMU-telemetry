@@ -1,0 +1,21 @@
+LMU Telemetry - Windows 10/11 x64
+
+Extract the entire ZIP, then double-click LMU Telemetry.exe.
+Keep the EXE and its _internal directory together.
+No Python, Node.js, npm, or administrator access is required.
+
+Choose the folder containing your .duckdb recordings.
+Start analyzer opens the web interface in your default browser.
+Start live overlay starts coaching using an automatically selected reference.
+Start LMU and load a session; the game must publish its shared-memory interface.
+A matching, usable reference recording must exist in your selected folder.
+The overlay uses the game monitor and top-center placement. Use windowed or
+borderless mode if exclusive fullscreen prevents the overlay appearing.
+
+Keep the launcher open. Stop controls work independently; closing the launcher
+stops both components. Closing the browser alone does not stop the analyzer.
+Settings, cache and logs: %LOCALAPPDATA%\LMU Telemetry
+Use Open logs if startup fails or the overlay exits.
+
+This release is unsigned. Telemetry recordings are not included.
+See LICENSE.txt for terms of use.

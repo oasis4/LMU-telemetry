@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import CompareView from './views/CompareView.vue'
 import IdealView from './views/IdealView.vue'
+import SharingView from './views/SharingView.vue'
 import SessionsView from './views/SessionsView.vue'
 
 // The comparison is the landing page. It is what the tool is for, and it was
@@ -9,6 +10,7 @@ import SessionsView from './views/SessionsView.vue'
 const routes = [
   { path: '/', name: 'compare', component: CompareView },
   { path: '/ideal', name: 'ideal', component: IdealView },
+  { path: '/sharing', name: 'sharing', component: SharingView },
   { path: '/recordings', name: 'sessions', component: SessionsView },
 ]
 
